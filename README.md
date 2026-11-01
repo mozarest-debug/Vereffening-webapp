@@ -10,6 +10,10 @@ Offline webapp voor de vereffening van grondslagnetwerken, vergelijkbaar met MOV
 
 Alle berekeningen gebeuren lokaal in de browser. Er worden geen gegevens verstuurd.
 
+## Downloaden
+
+De kant-en-klare app staat bij [Releases](../../releases): download `Vereffening.html` en open het in Chrome of Edge. Bouwen is alleen nodig als je de broncode wilt aanpassen.
+
 ## Validatie
 
 - **RDNAPTRANS™2018:** getoetst met de NSGI-validatieset Z001 (10.000 punten). De maximale afwijkingen zijn 0,6 mm in RD en 0,05 mm in NAP. Je kunt dit zelf nagaan met `test/test_rdnap.js`.
@@ -64,5 +68,7 @@ npm install && npm run test:ui                               # interface; vereis
 [GNU General Public License v3.0 of later](LICENSE). Je mag de software gebruiken, aanpassen en verspreiden. Verspreid je een aangepaste versie, dan moet je de broncode daarvan ook onder de GPL beschikbaar stellen.
 
 De software wordt geleverd zonder enige garantie. Controleer de uitkomsten zelf voordat je ze gebruikt voor officiële of contractuele doeleinden.
+
+De gebouwde app bevat het correctiegrid `rdcorr2018` en de quasi-geoïde `nlgeo2018` van RDNAPTRANS™2018, © Nederlandse Samenwerking Geodetische Infrastructuur (NSGI), gebruikt onder de licentie [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). De grids zijn omgezet naar een compact formaat; de waarden zijn ongewijzigd.
 
 RDNAPTRANS™ is een merk van NSGI (Nederlandse Samenwerking Geodetische Infrastructuur). MOVE3 is een product van Sweco. Leica, Captivate en GSI zijn merken van Leica Geosystems. Dit project is niet verbonden aan deze partijen.

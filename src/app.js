@@ -777,7 +777,7 @@
       ${groups}
       <section class="card"><h2>Reducties en transformatie</h2><div style="margin-top:8px">
         <label class="check"><input type="checkbox" data-setb="reduce_to_rd" ${val("reduce_to_rd") ? "checked" : ""}> Afstanden reduceren naar RD (puntschaal + hoogtereductie, in Nederland ca. −80 tot −100 ppm)</label>
-        <div class="small muted">Transformatie GNSS: RDNAPTRANS™2018 variant 1 met de NSGI-grids (ingebouwd, gevalideerd met de NSGI-testset).</div></div></section>
+        <div class="small muted">Transformatie GNSS: RDNAPTRANS™2018 variant 1 met de NSGI-grids (ingebouwd, gevalideerd met de NSGI-testset). Correctiegrid en quasi-geoïde (rdcorr2018, nlgeo2018): © NSGI, licentie CC BY 4.0.</div></div></section>
       <section class="card"><h2>Codelijst</h2><div class="row" style="margin-top:8px"><span class="grow">${S.codes && S.codes.name ? `${esc(S.codes.name)} · ${Object.keys(S.codes.codes).length} codes` : "Geen codelijst"} · rollen: 900/515 NAP → voorstel 1D vast · 906 opstelplaats → niet exporteren · 907/909/910/911 → exporteren</span><button class="btn" data-act="load-codelist">Andere codelijst laden (.xml)</button></div></section>
       <section class="card small muted">Versie ${VERSION} · laatste berekening ${nl(UI.lastMs || 0, 0)} ms · alle berekeningen gebeuren in deze browser, zonder internet.</section>`;
   }
