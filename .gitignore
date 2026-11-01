@@ -1,0 +1,20 @@
+# Gegenereerd bij het bouwen
+dist/grids.js
+dist/Vereffening.html
+shots/
+node_modules/
+
+# NSGI-grids en meetdata horen niet in de repository
+*.gsb
+rdcorr2018.txt
+nlgeo2018.txt
+Z001_ETRS89andRDNAP.txt
+data/
+demo/
+*.GSI
+*.gsi
+*.xml
+!src/**/*.xml
+
+__pycache__/
+.DS_Store
