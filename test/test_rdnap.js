@@ -1,8 +1,8 @@
 const fs = require("fs");
 require("../src/math.js"); require("../src/rdnap.js"); require("../dist/grids.js");
 const G = V.GRIDDATA;
-const t = new V.RDNAPTRANS(V.Grid.fromPacked(G.rdcorr.meta, G.rdcorr.b64), V.Grid.fromPacked(G.nlgeo.meta, G.nlgeo.b64));
-// Gebruik: node test/test_rdnap.js pad/naar/Z001_ETRS89andRDNAP.txt (NSGI-validatieset)
+const t = new V.TransformatieRdNap(V.Grid.fromPacked(G.rdcorr.meta, G.rdcorr.b64), V.Grid.fromPacked(G.nlgeo.meta, G.nlgeo.b64));
+// Gebruik: node test/test_rdnap.js pad/naar/Z001_ETRS89andRDNAP.txt (openbare testset van NSGI)
 const file = process.argv[2];
 if (!file) { console.error("Gebruik: node test/test_rdnap.js Z001_ETRS89andRDNAP.txt"); process.exit(1); }
 const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).slice(1).filter(Boolean);

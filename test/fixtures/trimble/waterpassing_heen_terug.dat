@@ -1,0 +1,60 @@
+For M5|Adr     1|TO  test-heen-terug.dat        |                      |                      |                      | 
+For M5|Adr     2|TO  Doorg.begin        AV     4|                      |                      |                      | 
+For M5|Adr     3|KD1        1  NAP             4|                      |                      |Z         1.25000 m   | 
+For M5|Adr     4|KD1        1  NAP 09:59:383   4|Lr        1.23148 m   |E          30.512 m   |                      | 
+For M5|Adr     5|KD1        2   TP 10:01:383   4|Lv        1.76829 m   |E          31.585 m   |                      | 
+For M5|Adr     6|KD1        2   TP 10:03:343   4|Lv        1.76839 m   |E          31.595 m   |                      | 
+For M5|Adr     7|KD1        1  NAP 10:05:223   4|Lr        1.23162 m   |E          30.502 m   |                      | 
+For M5|Adr     8|KD1        2   TP 10:01:38    4|                      |                      |Z         0.71319 m   | 
+For M5|Adr     9|KD1        2   TP 10:07:073   4|Lr        1.06892 m   |E          34.166 m   |                      | 
+For M5|Adr    10|KD1        3 9000 10:09:033   4|Lv        1.38265 m   |E          30.729 m   |                      | 
+For M5|Adr    11|KD1        3 9000 10:11:123   4|Lv        1.38286 m   |E          30.739 m   |                      | 
+For M5|Adr    12|KD1        2   TP 10:12:343   4|Lr        1.06873 m   |E          34.156 m   |                      | 
+For M5|Adr    13|KD1        3 9000 10:09:03    4|                      |                      |Z         0.39946 m   | 
+For M5|Adr    14|KD1        3 9000 10:14:213   4|Lr        1.69508 m   |E          49.542 m   |                      | 
+For M5|Adr    15|KD1        4  401 10:16:273   4|Lv        1.59049 m   |E          48.453 m   |                      | 
+For M5|Adr    16|KD1        4  401 10:17:463   4|Lv        1.59050 m   |E          48.463 m   |                      | 
+For M5|Adr    17|KD1        3 9000 10:19:343   4|Lr        1.69525 m   |E          49.532 m   |                      | 
+For M5|Adr    18|KD1        4  401 10:16:27    4|                      |                      |Z         0.50405 m   | 
+For M5|Adr    19|KD1        4  401 10:21:053   4|Lr        1.47031 m   |E          47.995 m   |                      | 
+For M5|Adr    20|KD1        5  402 10:22:343   4|Lv        1.57685 m   |E          48.495 m   |                      | 
+For M5|Adr    21|KD1        5  402 10:24:233   4|Lv        1.57686 m   |E          48.505 m   |                      | 
+For M5|Adr    22|KD1        4  401 10:26:323   4|Lr        1.47030 m   |E          47.985 m   |                      | 
+For M5|Adr    23|KD1        5  402 10:22:34    4|                      |                      |Z         0.39752 m   | 
+For M5|Adr    24|KD1        5  402 10:27:583   4|Lr        1.55098 m   |E          47.253 m   |                      | 
+For M5|Adr    25|KD1        6  403 10:29:593   4|Lv        1.77201 m   |E          48.978 m   |                      | 
+For M5|Adr    26|KD1        6  403 10:31:123   4|Lv        1.77206 m   |E          48.988 m   |                      | 
+For M5|Adr    27|KD1        5  402 10:32:593   4|Lr        1.55111 m   |E          47.243 m   |                      | 
+For M5|Adr    28|KD1        6  403 10:29:59    4|                      |                      |Z         0.17650 m   | 
+For M5|Adr    29|KD1        6  403 10:34:143   4|Lr        1.26511 m   |E          47.728 m   |                      | 
+For M5|Adr    30|KD1        7  404 10:35:443   4|Lv        1.33369 m   |E          48.860 m   |                      | 
+For M5|Adr    31|KD1        7  404 10:37:103   4|Lv        1.33348 m   |E          48.870 m   |                      | 
+For M5|Adr    32|KD1        6  403 10:38:343   4|Lr        1.26520 m   |E          47.718 m   |                      | 
+For M5|Adr    33|KD1        7  404 10:35:44    4|                      |                      |Z         0.10791 m   | 
+For M5|Adr    34|TO  Zijslag                   4|                      |                      |                      | 
+For M5|Adr    35|KD1        8  405 10:40:163   4|Lz        1.20943 m   |E          18.200 m   |Z         0.23217 m   | 
+For M5|Adr    36|TO  Einde zijslag             4|                      |                      |                      | 
+For M5|Adr    37|TO  Doorg.einde               4|                      |                      |                      | 
+For M5|Adr    38|TO  Doorg.begin        BF     4|                      |                      |                      | 
+For M5|Adr    39|KD1        9  404             4|                      |                      |Z         0.10791 m   | 
+For M5|Adr    40|KD1        9  404 10:42:043   4|Lr        1.22132 m   |E          46.263 m   |                      | 
+For M5|Adr    41|KD1       10  403 10:43:273   4|Lv        1.15239 m   |E          48.729 m   |                      | 
+For M5|Adr    42|KD1       10  403 10:43:27    4|                      |                      |Z         0.17684 m   | 
+For M5|Adr    43|KD1       10  403 10:45:073   4|Lr        1.65111 m   |E          49.731 m   |                      | 
+For M5|Adr    44|KD1       11  402 10:47:093   4|Lv        1.42897 m   |E          48.368 m   |                      | 
+For M5|Adr    45|KD1       11  402 10:47:09    4|                      |                      |Z         0.39899 m   | 
+For M5|Adr    46|KD1       11  402 10:49:003   4|Lr        1.49127 m   |E          48.941 m   |                      | 
+For M5|Adr    47|KD1       12  401 10:50:463   4|Lv        1.38469 m   |E          49.607 m   |                      | 
+For M5|Adr    48|KD1       12  401 10:50:46    4|                      |                      |Z         0.50557 m   | 
+For M5|Adr    49|KD1       12  401 10:52:083   4|Lr        1.47508 m   |E          47.684 m   |                      | 
+For M5|Adr    50|KD1       13 9000 10:53:443   4|Lv        1.58001 m   |E          46.144 m   |                      | 
+For M5|Adr    51|KD1       13 9000 10:53:44    4|                      |                      |Z         0.40064 m   | 
+For M5|Adr    52|KD1       13 9000 10:55:153   4|Lr        1.91593 m   |E          32.152 m   |                      | 
+For M5|Adr    53|KD1       14   TP 10:57:223   4|Lv        1.34261 m   |E          33.363 m   |                      | 
+For M5|Adr    54|KD1       14   TP 10:57:22    4|                      |                      |Z         0.97396 m   | 
+For M5|Adr    55|KD1       14   TP 10:59:223   4|Lr        1.52757 m   |E          33.724 m   |                      | 
+For M5|Adr    56|KD1       15  NAP 11:01:133   4|Lv        1.25034 m   |E          33.749 m   |                      | 
+For M5|Adr    57|KD1       15  NAP 11:01:13    4|                      |                      |Z         1.25119 m   | 
+For M5|Adr    58|KD1       16  NAP             4|Sh        0.00119 m   |dz       -0.00119 m   |Z         1.25000 m   | 
+For M5|Adr    59|KD2       16  NAP  15         4|Sr         258.49 m   |Sv         259.96 m   |Z         1.25119 m   | 
+For M5|Adr    60|TO  Doorg.einde               4|                      |                      |                      | 

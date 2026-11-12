@@ -1,4 +1,5 @@
-// Zet de NSGI-ASCII-grids van RDNAPTRANS2018 om naar compacte Int32 (base64) -> dist/grids.js
+// Zet de ASCII-correctiegrids (rdcorr2018.txt, nlgeo2018.txt, bron: NSGI) om naar compacte Int32 (base64) -> dist/grids.js
+// De waarden blijven ongewijzigd (verliesvrije omzetting van het formaat).
 // Gebruik: node tools/pack_grids.js pad/naar/rdcorr2018.txt pad/naar/nlgeo2018.txt
 const fs = require("fs");
 const path = require("path");

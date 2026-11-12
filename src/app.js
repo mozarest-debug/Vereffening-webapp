@@ -3,7 +3,7 @@
 (function (V) {
   "use strict";
   const M = V.M;
-  const VERSION = "1.0";
+  const VERSION = "1.1";
   const LS_KEY = "vereffening.project.v1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -45,7 +45,7 @@
   function getTrans() {
     if (!TRANS) {
       const G = V.GRIDDATA;
-      TRANS = new V.RDNAPTRANS(V.Grid.fromPacked(G.rdcorr.meta, G.rdcorr.b64), V.Grid.fromPacked(G.nlgeo.meta, G.nlgeo.b64));
+      TRANS = new V.TransformatieRdNap(V.Grid.fromPacked(G.rdcorr.meta, G.rdcorr.b64), V.Grid.fromPacked(G.nlgeo.meta, G.nlgeo.b64));
     }
     return TRANS;
   }
@@ -84,6 +84,10 @@
     if (ext === "tco") return "move3-tco";
     if (ext === "obs") return "move3";
     if (ext === "prj") return "skip";
+    if (ext === "job") return "job";
+    if (ext === "dwg" || ext === "jxl" || ext === "jpg" || ext === "jpeg" || ext === "pdf" || ext === "xlsx") return "skip";
+    if (ext === "dc" || /^00NM/.test(text.slice(0, 4))) return "dc";
+    if (/^For M5\|/m.test(text.slice(0, 4000))) return "dini";
     if (ext === "xml" || /^\s*<\?xml|<LandXML/i.test(text.slice(0, 2000))) return /LandXML/i.test(text.slice(0, 5000)) ? "hexml" : "codelist";
     const first = text.split(/\r?\n/).find((l) => l.trim()) || "";
     if (ext === "gsi" || /^\*?(11|41)[0-9.]{4}[+-]/.test(first.trim())) return "gsi";
@@ -94,6 +98,9 @@
     if (kind === "hexml") base = /ObservationGroup/.test(text) ? "TPS" : "GNSS";
     else if (kind === "gsi") base = V.detectKind(V.readGsi(text.slice(0, 20000))) === "waterpassing" ? "WP" : "TS";
     else if (kind === "move3") base = "M3";
+    else if (kind === "dini") base = "WP";
+    else if (kind === "dc") base = "GNSS";
+    else if (kind === "job") base = "TPS";
     else if (kind === "coords") base = /nap/i.test(name) ? "NAP" : "LIJST";
     const used = new Set(st.sources.map((s) => s.tag));
     let tag = base, k = 2;
@@ -101,7 +108,11 @@
     return tag;
   }
   async function addFiles(fileList, stageIdx) {
-    const files = await Promise.all([...fileList].map(async (f) => ({ name: f.name, text: decode(await f.arrayBuffer()) })));
+    const files = await Promise.all([...fileList].map(async (f) => {
+      const buf = await f.arrayBuffer();
+      if (/\.job$/i.test(f.name)) return { name: f.name, text: "", b64: V.bytesToB64(new Uint8Array(buf)) };
+      return { name: f.name, text: decode(buf) };
+    }));
     if (stageIdx === undefined) {
       if (!S.stages.length) S.stages.push(V.newStage((files[0] ? files[0].name.replace(/\.[^.]+$/, "") : "Meting").slice(0, 40)));
       stageIdx = UI.stage < S.stages.length ? UI.stage : 0;
@@ -115,6 +126,7 @@
       if (kind === "skip" || kind === "move3-tco") continue;
       if (kind === "codelist") { loadCodelist(f.text, f.name); continue; }
       const src = { id: uid(), name: f.name, kind, text: f.text, options: {}, disabled: false };
+      if (kind === "job") src.b64 = f.b64;
       if (kind === "move3") {
         src.tco = tcos[f.name.replace(/\.[^.]+$/, "").toLowerCase()];
         if (!src.tco) { toast(`${f.name}: kies het .tco-bestand samen met het .obs-bestand`); continue; }
@@ -264,7 +276,7 @@
     if (!S.stages.length) {
       return `<div class="row"><h1 class="grow">Project en stappen</h1></div>
       <div class="drop" data-drop="new"><h2>Sleep één of meer meetbestanden hierheen om te beginnen</h2>
-        <div class="muted">HeXML (Captivate) · GSI8/GSI16 (total station of waterpassing) · MOVE3 (.tco + .obs) · coördinatenlijst (CSV/TXT)</div>
+        <div class="muted">HeXML (Captivate) · GSI8/GSI16 (total station of waterpassing) · MOVE3 (.tco + .obs) · Trimble DiNi (.dat), DC (.dc), .job · coördinatenlijst (CSV/TXT)</div>
         <div class="row" style="justify-content:center"><button class="btn pri" data-act="pick-files">Bestanden kiezen</button><button class="btn" data-act="add-stage">Lege stap toevoegen</button><button class="btn" data-act="demo">Voorbeeldproject dijkweg laden</button></div>
         <div class="small muted">Alles blijft op dit apparaat. Er wordt niets verstuurd.</div></div>`;
     }
@@ -324,7 +336,12 @@
         if (inf && inf.kind === "gsi-wp") opts += `<label class="check" style="align-self:end"><input type="checkbox" data-src="${i}" data-k="start_known" ${s.options.start_known ? "checked" : ""}> Starthoogte uit het bestand vastzetten</label>`;
       }
       if (s.kind === "move3") opts = `<label class="field">Bekende punten<select data-src="${i}" data-k="phase"><option value="gewogen" ${s.options.phase !== "vast" ? "selected" : ""}>gewogen (fase 1)</option><option value="vast" ${s.options.phase === "vast" ? "selected" : ""}>vast</option></select></label>`;
-      const kindName = { hexml: "HeXML", gsi: "GSI", coords: "LIJST", move3: "MOVE3" }[s.kind];
+      if (s.kind === "dini") opts = `<label class="check" style="align-self:end"><input type="checkbox" data-src="${i}" data-k="start_known" ${s.options.start_known ? "checked" : ""}> Starthoogte uit het bestand vastzetten</label><label class="check" style="align-self:end" title="Korte DiNi-nummers (414, NAP) koppelen aan namen uit de coördinatenlijst (gp-0414, nap-…)"><input type="checkbox" data-src="${i}" data-k="map" ${s.options.map !== false ? "checked" : ""}> Puntnamen koppelen aan lijst</label>`;
+      if (s.kind === "job") {
+        const pr = inf && inf.prisms ? Object.keys(inf.prisms) : [];
+        opts = pr.map((k) => { const c = s.options.constants && s.options.constants[k] !== undefined ? s.options.constants[k] : inf.prisms[k]; return `<label class="field" title="Absolute prismaconstante (Trimble-conventie) die bij de schuine afstand wordt opgeteld">${k} (mm)<input class="mono" style="width:70px" data-src="${i}" data-k="const:${k}" value="${nl(c, 1)}"></label>`; }).join("") + `<span class="badge warn" style="align-self:end" title="Het .job-formaat is niet gepubliceerd; de lezer is nagebouwd. Controleer de resultaten.">experimenteel</span>`;
+      }
+      const kindName = { hexml: "HeXML", gsi: "GSI", coords: "LIJST", move3: "MOVE3", dini: "DiNi", dc: "DC", job: "JOB" }[s.kind];
       return `<div class="srccard"><span class="badge blue">${kindName}</span><div class="grow" style="min-width:220px"><div class="mono" style="font-weight:600">${esc(s.name)}</div><div class="small muted">${esc(inf ? inf.summary : s.disabled ? "uitgeschakeld" : "")}${inf && inf.reflectors && inf.reflectors.length ? " · reflector: " + esc(inf.reflectors.join(", ")) : ""}</div></div>
         <label class="field">Label<input class="mono" style="width:90px" data-src="${i}" data-k="tag" value="${esc(s.tag)}"></label>${opts}
         <button class="btn sm" data-act="src-toggle" data-i="${i}">${s.disabled ? "Aanzetten" : "Uitzetten"}</button><button class="btn sm danger" data-act="src-del" data-i="${i}">Verwijderen</button></div>`;
@@ -341,7 +358,7 @@
     const rules = st.known.filter((r) => !r.disabled);
     const pre = R && R.checks ? R.checks.precheck : [];
     return `<div class="row"><h1 class="grow">Bestanden van deze stap</h1></div>
-      <div class="drop" data-drop="stage"><h2>Sleep één of meer meetbestanden hierheen</h2><div class="muted">HeXML (Captivate) · GSI8/GSI16 (total station of waterpassing) · MOVE3 (.tco + .obs) · coördinatenlijst</div><button class="btn pri" data-act="pick-files">Bestanden kiezen</button></div>
+      <div class="drop" data-drop="stage"><h2>Sleep één of meer meetbestanden hierheen</h2><div class="muted">HeXML (Captivate) · GSI8/GSI16 (total station of waterpassing) · MOVE3 (.tco + .obs) · Trimble DiNi (.dat), DC (.dc), .job · coördinatenlijst</div><button class="btn pri" data-act="pick-files">Bestanden kiezen</button></div>
       ${st.sources.length ? `<section class="card">${list}</section>` : ""}
       ${R && R.error ? `<div class="msg bad"><b>Deze stap kan niet worden berekend:</b> ${esc(R.error)}</div>` : ""}
       <section class="card"><div class="row"><span class="badge">${rules.length ? (UI.stage ? "UIT EERDERE STAPPEN / LIJST" : "BEKENDE PUNTEN") : "GEEN BEKENDE PUNTEN"}</span><div class="grow">${rules.map((r) => `${esc(Array.isArray(r.points) ? r.points.join(", ") : r.points)}${r.codes && r.codes.length ? " (code " + esc(r.codes.join(",")) + ")" : ""}: ${r.dim} ${r.mode === "vast_getoetst" ? "vast, wel toetsen" : r.mode} uit ${r.origin === "lijst" ? "lijst/job" : esc(r.origin)}`).join(" · ") || '<span class="muted">Er zijn geen regels; het netwerk ligt vast via GNSS of wordt vrij vereffend.</span>'}</div><button class="btn sm" data-act="view" data-v="stappen">Regels wijzigen</button></div></section>
@@ -777,7 +794,13 @@
       ${groups}
       <section class="card"><h2>Reducties en transformatie</h2><div style="margin-top:8px">
         <label class="check"><input type="checkbox" data-setb="reduce_to_rd" ${val("reduce_to_rd") ? "checked" : ""}> Afstanden reduceren naar RD (puntschaal + hoogtereductie, in Nederland ca. −80 tot −100 ppm)</label>
-        <div class="small muted">Transformatie GNSS: RDNAPTRANS™2018 variant 1 met de NSGI-grids (ingebouwd, gevalideerd met de NSGI-testset). Correctiegrid en quasi-geoïde (rdcorr2018, nlgeo2018): © NSGI, licentie CC BY 4.0.</div></div></section>
+        <div class="small muted">Transformatie GNSS: eigen implementatie van de transformatie tussen ETRS89 en RD/NAP (met correctiegrids). Zelf gecontroleerd met de openbare testpunten, maar niet officieel gevalideerd.</div></div></section>
+      <section class="card small"><h2>Over deze app</h2>
+        <p><b>Licentie:</b> GNU General Public License v3.0 of later. De app wordt geleverd <b>zonder enige garantie</b>. Controleer de uitkomsten zelf voordat je ze gebruikt voor uitzetwerk, officiële of contractuele doeleinden; gebruik bij twijfel gecertificeerde software ter controle.</p>
+        <p><b>Correctiegrids:</b> het correctiegrid rdcorr2018 en de quasi-geoïde nlgeo2018 zijn afkomstig van de Nederlandse Samenwerking Geodetische Infrastructuur (NSGI) en worden gebruikt onder een Creative Commons-licentie (<a href="https://creativecommons.org/licenses/by-nd/4.0/deed.nl" target="_blank" rel="noopener">CC BY-ND 4.0</a>, zoals vermeld bij de download). De waarden zijn ongewijzigd; alleen het bestandsformaat is omgezet naar een compacte vorm. NSGI is niet verantwoordelijk voor deze app.</p>
+        <p><b>Trimble .job:</b> dit formaat is niet gepubliceerd; de lezer is afgeleid uit voorbeeldbestanden en is experimenteel. Gebruik bij voorkeur een officiële export (JobXML) of controleer de uitkomst.</p>
+        <p><b>Merken:</b> Leica, Captivate, HeXML en GSI zijn merken van Leica Geosystems; Trimble, DiNi en Trimble Access van Trimble; MOVE3 van Sweco. Ze worden alleen genoemd om aan te geven welke bestanden de app leest. Deze app is niet verbonden aan of goedgekeurd door deze partijen.</p>
+        <p><b>Privacy:</b> alles wordt in deze browser berekend en bewaard; er gaat niets over internet.</p></section>
       <section class="card"><h2>Codelijst</h2><div class="row" style="margin-top:8px"><span class="grow">${S.codes && S.codes.name ? `${esc(S.codes.name)} · ${Object.keys(S.codes.codes).length} codes` : "Geen codelijst"} · rollen: 900/515 NAP → voorstel 1D vast · 906 opstelplaats → niet exporteren · 907/909/910/911 → exporteren</span><button class="btn" data-act="load-codelist">Andere codelijst laden (.xml)</button></div></section>
       <section class="card small muted">Versie ${VERSION} · laatste berekening ${nl(UI.lastMs || 0, 0)} ms · alle berekeningen gebeuren in deze browser, zonder internet.</section>`;
   }
@@ -813,7 +836,7 @@
       el.ondrop = (e) => { e.preventDefault(); el.classList.remove("over"); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files, el.dataset.drop === "stage" ? UI.stage : undefined); };
     });
   }
-  const num = (v) => { const x = Number(String(v).replace(",", ".").trim()); return Number.isFinite(x) ? x : null; };
+  const num = (v) => { const x = Number(String(v).replace(",", ".").replace("−", "-").trim()); return Number.isFinite(x) ? x : null; };
   function onClick(ev) {
     const b = ev.target.closest("[data-act]");
     if (!b || b.tagName === "SELECT" || b.tagName === "INPUT") return;
@@ -829,7 +852,7 @@
       case "move-stage": { const i = +d.i, j = i + +d.d; [S.stages[i], S.stages[j]] = [S.stages[j], S.stages[i]]; UI.stage = j; changed(); break; }
       case "del-stage": if (confirm(`Stap "${S.stages[+d.i].name}" verwijderen met alle bestanden en regels?`)) { S.stages.splice(+d.i, 1); UI.stage = Math.max(0, Math.min(UI.stage, S.stages.length - 1)); changed(); } break;
       case "recalc": changed(); toast("Opnieuw gerekend"); break;
-      case "pick-files": pickFiles(".xml,.gsi,.GSI,.csv,.txt,.tco,.obs,.prj", true, (f) => addFiles(f, UI.view === "stap" ? UI.stage : undefined)); break;
+      case "pick-files": pickFiles(".xml,.gsi,.GSI,.csv,.txt,.tco,.obs,.prj,.dat,.DAT,.dc,.DC,.job,.JOB", true, (f) => addFiles(f, UI.view === "stap" ? UI.stage : undefined)); break;
       case "demo": demo(); break;
       case "src-toggle": st.sources[+d.i].disabled = !st.sources[+d.i].disabled; changed(); break;
       case "src-del": if (confirm(`${st.sources[+d.i].name} uit deze stap verwijderen?`)) { st.sources.splice(+d.i, 1); changed(); } break;
@@ -893,6 +916,8 @@
       else if (d.k === "start_known") s.options.start_known = t.checked;
       else if (d.k === "soort") s.options.soort = t.value || undefined;
       else if (d.k === "phase") s.options.phase = t.value;
+      else if (d.k === "map") s.options.map = t.checked;
+      else if (d.k.startsWith("const:")) { const v = num(t.value); s.options.constants = s.options.constants || {}; if (Number.isFinite(v)) s.options.constants[d.k.slice(6)] = v; else delete s.options.constants[d.k.slice(6)]; }
       changed(); return;
     }
     if (d.stageK) {

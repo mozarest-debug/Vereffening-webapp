@@ -26,7 +26,7 @@ if a.demo:
     demo_js = f"V.DEMO={json.dumps(demo)};"
 
 js = "".join((R / "src" / f"{n}.js").read_text(encoding="utf-8") + "\n"
-             for n in ["math", "rdnap", "core", "obs", "hexml", "gsi", "project", "export", "app"])
+             for n in ["math", "rdnap", "core", "obs", "hexml", "gsi", "trimble", "project", "export", "app"])
 safe = lambda s: s.replace("</script", "<\\/script")
 html = f"""<!doctype html>
 <html lang="nl">
@@ -34,7 +34,7 @@ html = f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vereffening</title>
-<meta name="description" content="Vereffening grondslagnetwerk – offline webapp (kleinste kwadraten, Delftse toetsing, RDNAPTRANS2018)">
+<meta name="description" content="Vereffening grondslagnetwerk – offline webapp (kleinste kwadraten, Delftse toetsing, transformatie RD/NAP)">
 <style>{(R / "src" / "style.css").read_text(encoding="utf-8")}</style>
 </head>
 <body>

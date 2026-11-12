@@ -37,7 +37,7 @@
     if (!xs.length || !ys.length) return 1.0;
     const hs = [pa.H, pb.H].filter(M.isNum);
     const hm = (hs.length ? M.mean(hs) : 0) + GEOID_APPROX;
-    const k = V.RDNAPTRANS.rdScaleFactor(M.mean(xs), M.mean(ys));
+    const k = V.TransformatieRdNap.rdScaleFactor(M.mean(xs), M.mean(ys));
     return k * R_EARTH / (R_EARTH + hm);
   }
 
