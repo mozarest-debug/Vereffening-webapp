@@ -1,5 +1,5 @@
 // ===================================================================== rdnap.js
-// RDNAPTRANS(TM)2018 variant 1 (NSGI-specificatie 27-06-2022), ETRS89 <-> RD/NAP.
+// Transformatie ETRS89 <-> RD/NAP volgens de openbare procedure (variant 1, specificatie 27-06-2022).
 (function (V) {
   "use strict";
   const DEG = Math.PI / 180;
@@ -66,7 +66,7 @@
       });
     }
   }
-  // Grid uit NSGI-ASCII-tekst (kopregel + lat lon waarde(n))
+  // Grid uit ASCII-tekst (kopregel + lat lon waarde(n))
   Grid.fromText = function (txt, ncols) {
     const lines = txt.split(/\r?\n/).slice(1).filter((l) => l.trim());
     const n = lines.length;
@@ -141,7 +141,7 @@
     return [lat, lonN + 2 * Math.PI * Math.floor((Math.PI - lonN) / (2 * Math.PI))];
   }
 
-  class RDNAPTRANS {
+  class TransformatieRdNap {
     constructor(rdcorr, geoid) { this.rdcorr = rdcorr; this.geoid = geoid; }
     quasiGeoid(lat, lon) { return this.geoid.interp(lat, lon, NaN)[0]; }
     inRdGrid(lat, lon) { return this.rdcorr.inside(lat, lon); }
@@ -179,8 +179,8 @@
     }
   }
   // puntschaalfactor RD-projectie
-  RDNAPTRANS.rdScaleFactor = (x, y) => K_RD * (1 + ((x - X0) ** 2 + (y - Y0) ** 2) / (4 * (K_RD * Rs) ** 2));
+  TransformatieRdNap.rdScaleFactor = (x, y) => K_RD * (1 + ((x - X0) ** 2 + (y - Y0) ** 2) / (4 * (K_RD * Rs) ** 2));
 
   V.Grid = Grid;
-  V.RDNAPTRANS = RDNAPTRANS;
+  V.TransformatieRdNap = TransformatieRdNap;
 })(globalThis.V = globalThis.V || {});

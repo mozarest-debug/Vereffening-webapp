@@ -95,6 +95,23 @@
       this.results = [];
     }
 
+    _levSource(net, lev, src, S, R, tag, label0, kind) {
+      const log = R.log, ck = R.checks, label = src.tag || src.name;
+      V.addLevelingToNetwork(net, lev, S, tag);
+      const sum = `${lev.lines.length} traject(en) · ${lev.setups.length} opstellingen · ${f1(lev.length_m / 1000, 2)} km` + (M.isNum(lev.misclosure_mm) ? ` · sluitfout ${sg(lev.misclosure_mm, 2)} mm` : "") + (lev.turning.length ? ` · ${lev.turning.length} wisselpunten` : "");
+      log.push(`${label}: ${label0}, ${sum}`);
+      const rd = lev.repeat_diffs;
+      const secs = V.sectionCheck(lev, S.lev_tol_sqrtkm || S.lev_tol_mm_sqrtkm, S.lev_tol_min_mm);
+      const diag = V.diagnoseSections(secs);
+      ck.leveling.push({ tag: src.tag, name: src.name, lines: lev.lines.map((L) => ({ start: L.start && L.start[0], end: L.end[0], length_m: L.length_m, misclosure_mm: L.misclosure_mm })), length_m: lev.length_m, misclosure_mm: lev.misclosure_mm, tol_mm: Math.max(S.lev_tol_min_mm, S.lev_tol_mm_sqrtkm * Math.sqrt(lev.length_m / 1000)), repeat_max_mm: rd.length ? Math.max(...rd.map((x) => Math.abs(x[3]))) : null, repeat_n: rd.length, sections: secs, diagnoses: diag, setups: lev.setups.length, turning: lev.turning.length });
+      ck.sources.push({ tag: src.tag, name: src.name, kind, summary: sum });
+      if (rd.length) log.push(`    dubbele aflezingen: max verschil ${f1(Math.max(...rd.map((x) => Math.abs(x[3]))), 2)} mm (${rd.length} paren)`);
+      if (secs.length) log.push(`    heen/terug: ${secs.length} secties, ${secs.filter((x) => !x.ok).length} buiten tolerantie`);
+      for (const d of diag) log.push(`    DIAGNOSE: ${d.tekst}`);
+      if (lev.start && src.options && src.options.start_known) net.setKnown(lev.start[0], "1D", "vast", { H: lev.start[1] });
+      return net;
+    }
+
     _load(src, S, known, R) {
       const tag = src.tag ? src.tag + ":" : "";
       const log = R.log, ck = R.checks;
@@ -106,7 +123,7 @@
         return { net: null, lists: c };
       }
       if (src.kind === "hexml") {
-        if (!this.trans) throw new Error("RDNAPTRANS-grids ontbreken");
+        if (!this.trans) throw new Error("Transformatiegrids RD/NAP ontbreken");
         const imp = V.loadHexml(src.text, this.trans, S);
         const nOcc = imp.net.obs.filter((o) => o.kind === "GNSS").length;
         const nG = Object.keys(imp.gnss).length;
@@ -149,18 +166,7 @@
         if (kind === "waterpassing") {
           const keep = new Set([...((src.options && src.options.keep) || []), ...Object.keys(known)]);
           const lev = V.parseLeveling(blocks, keep, tag, S.lev_tp_maxlen);
-          V.addLevelingToNetwork(net, lev, S, tag);
-          const sum = `${lev.lines.length} traject(en) · ${lev.setups.length} opstellingen · ${f1(lev.length_m / 1000, 2)} km` + (M.isNum(lev.misclosure_mm) ? ` · sluitfout ${sg(lev.misclosure_mm, 2)} mm` : "") + (lev.turning.length ? ` · ${lev.turning.length} wisselpunten` : "");
-          log.push(`${label}: GSI-waterpassing, ${sum}`);
-          const rd = lev.repeat_diffs;
-          const secs = V.sectionCheck(lev, S.lev_tol_sqrtkm || S.lev_tol_mm_sqrtkm, S.lev_tol_min_mm);
-          const diag = V.diagnoseSections(secs);
-          ck.leveling.push({ tag: src.tag, name: src.name, lines: lev.lines.map((L) => ({ start: L.start && L.start[0], end: L.end[0], length_m: L.length_m, misclosure_mm: L.misclosure_mm })), length_m: lev.length_m, misclosure_mm: lev.misclosure_mm, tol_mm: Math.max(S.lev_tol_min_mm, S.lev_tol_mm_sqrtkm * Math.sqrt(lev.length_m / 1000)), repeat_max_mm: rd.length ? Math.max(...rd.map((x) => Math.abs(x[3]))) : null, repeat_n: rd.length, sections: secs, diagnoses: diag, setups: lev.setups.length, turning: lev.turning.length });
-          ck.sources.push({ tag: src.tag, name: src.name, kind: "gsi-wp", summary: sum });
-          if (rd.length) log.push(`    dubbele aflezingen: max verschil ${f1(Math.max(...rd.map((x) => Math.abs(x[3]))), 2)} mm (${rd.length} paren)`);
-          if (secs.length) log.push(`    heen/terug: ${secs.length} secties, ${secs.filter((x) => !x.ok).length} buiten tolerantie`);
-          for (const d of diag) log.push(`    DIAGNOSE: ${d.tekst}`);
-          if (lev.start && src.options && src.options.start_known) net.setKnown(lev.start[0], "1D", "vast", { H: lev.start[1] });
+          this._levSource(net, lev, src, S, R, tag, "GSI-waterpassing", "gsi-wp");
         } else {
           const tps = V.parseTps(blocks, (src.options && src.options.codes) || V.TPS_CODES, tag);
           V.addTpsToNetwork(net, tps, known, S, !(src.options && src.options.prism === false), tag);
@@ -171,6 +177,63 @@
           ck.faceChecks.push(...fc);
           for (const w of tps.warnings) { log.push(`  waarschuwing: ${w}`); ck.warnings.push(w); }
         }
+        return { net, lists: {} };
+      }
+      if (src.kind === "dini") {
+        const net = new V.Network();
+        const lev = V.parseDini(src.text, new Set(Object.keys(known)), tag, { renames: (src.options && src.options.names) || {}, map: !(src.options && src.options.map === false) });
+        this._levSource(net, lev, src, S, R, tag, "Trimble DiNi-waterpassing", "dini");
+        const d = lev.dini;
+        const nm = Object.entries(d.map);
+        if (nm.length) log.push(`    puntnamen gekoppeld aan de coördinatenlijst: ${nm.map(([a, b]) => `${a}→${b}`).join(", ")}`);
+        if (d.ambiguous.length) { const w = `${label}: puntnaam niet eenduidig te koppelen: ${d.ambiguous.join("; ")}`; log.push("  waarschuwing: " + w); ck.warnings.push(w); }
+        if (d.unmatched.length) log.push(`    niet in de coördinatenlijst (blijven zo): ${d.unmatched.join(", ")}`);
+        for (const c of d.closing) log.push(`    DiNi zelf: sluitfout op ${c.punt} ${sg(-c.sh_mm, 2)} mm`);
+        return { net, lists: {} };
+      }
+      if (src.kind === "dc") {
+        if (!this.trans) throw new Error("Transformatiegrids RD/NAP ontbreken");
+        const imp = V.loadDc(src.text, this.trans, S, tag);
+        const nG = Object.keys(imp.gnss).length, nOcc = imp.occ.length;
+        const sum = `${nG} GNSS-punten` + (nOcc > nG ? ` (${nOcc} bezettingen)` : "");
+        log.push(`${label}: Trimble DC (GNSS), ${sum}`);
+        const offs = Object.values(imp.offsets);
+        if (offs.length) log.push(`    antenne→grond ${f1(Math.min(...offs), 3)}–${f1(Math.max(...offs), 3)} m (uit gemiddelde − bezettingen)`);
+        ck.sources.push({ tag: src.tag, name: src.name, kind: "dc", summary: sum });
+        const occ = {};
+        for (const o of imp.net.obs) if (o.kind === "GNSS" || o.kind === "GNSSH") {
+          const d = (occ[o.frm] = occ[o.frm] || []);
+          let e = d.find((q) => q.ref === o.ref);
+          if (!e) d.push((e = { ref: o.ref, setup: o.meta.bezetting, epochs: null }));
+          if (o.kind === "GNSS") e.xy = o.value; else e.h = o.value;
+        }
+        for (const [n, d] of Object.entries(occ).sort()) {
+          if (d.length < 2) continue;
+          let dxy = 0, dh = 0;
+          for (let i = 0; i < d.length; i++) for (let j = i + 1; j < d.length; j++) {
+            dxy = Math.max(dxy, Math.hypot(d[i].xy[0] - d[j].xy[0], d[i].xy[1] - d[j].xy[1]) * 1000);
+            dh = Math.max(dh, Math.abs(d[i].h - d[j].h) * 1000);
+          }
+          const ok = dxy <= S.gnss_tol_xy_mm && dh <= S.gnss_tol_h_mm;
+          const prevH = known[n] && M.isNum(known[n][2]) ? known[n][2] : null;
+          ck.gnssOcc.push({ punt: n, bezettingen: d.map((q) => ({ ref: tag + q.ref, setup: q.setup, epochs: q.epochs, dH_ref_mm: prevH !== null ? (q.h - prevH) * 1000 : null })), dxy_mm: dxy, dh_mm: dh, ok });
+          if (!ok) log.push(`    GNSS-bezettingen ${n}: verschil ligging ${f1(dxy, 0)} mm, hoogte ${f1(dh, 0)} mm (tolerantie ${f1(S.gnss_tol_xy_mm, 0)}/${f1(S.gnss_tol_h_mm, 0)} mm) → opnieuw meten of één bezetting uitschakelen`);
+        }
+        for (const w of imp.warnings) { log.push(`  waarschuwing: ${w}`); ck.warnings.push(w); }
+        return { net: imp.net, lists: {} };
+      }
+      if (src.kind === "job") {
+        const net = new V.Network();
+        const tps = V.parseJobTps(V.b64ToBytes(src.b64), new Set(Object.keys(known)), tag, { constants: (src.options && src.options.constants) || {} });
+        V.addTpsToNetwork(net, tps, known, S, true, tag);
+        const fc = tps.face_checks;
+        const pr = Object.entries(tps.prisms).map(([k, v]) => `${k} ${sg(v, 1)} mm`).join(", ");
+        const sum = `${new Set(tps.stations.map((s) => s[0])).size} opstelling(en) · ${tps.records.length} metingen` + (tps.checks ? ` · ${tps.checks} controlemetingen op bekende punten` : "") + (fc.length ? ` · kijkerstandverschil max c ${f1(Math.max(...fc.map((f) => Math.abs(f.c_mgon))))} / i ${f1(Math.max(...fc.map((f) => Math.abs(f.i_mgon))))} mgon` : "");
+        log.push(`${label}: Trimble .job (TPS, experimenteel), ${sum}`);
+        if (pr) log.push(`    prismaconstanten (Trimble, absoluut): ${pr}`);
+        ck.sources.push({ tag: src.tag, name: src.name, kind: "job", summary: sum, prisms: tps.prisms });
+        ck.faceChecks.push(...fc);
+        for (const w of tps.warnings) { log.push(`  waarschuwing: ${w}`); ck.warnings.push(w); }
         return { net, lists: {} };
       }
       if (src.kind === "move3") {
@@ -229,7 +292,7 @@
         const prevAll = this.results.length ? this.previous("vorige") : {};
         const known = {};
         for (const [n, c] of Object.entries(prevAll)) known[n] = [c.x ?? NaN, c.y ?? NaN, c.H ?? NaN];
-        const order = { coords: 0, hexml: 1, move3: 1, gsi: 2 };
+        const order = { coords: 0, hexml: 1, move3: 1, dc: 1, gsi: 2, dini: 2, job: 2 };
         const srcs = [...st.sources].filter((s) => !s.disabled).sort((a, b) => order[a.kind] - order[b.kind]);
         if (!srcs.length) throw new Error("Deze stap heeft nog geen bestanden");
         for (const src of srcs) {

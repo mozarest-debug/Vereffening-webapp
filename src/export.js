@@ -88,7 +88,7 @@
   }
   function fullReport(project, results, meta) {
     const L = [];
-    L.push(`VEREFFENINGSRAPPORT – ${meta.name || "project"}`, `Datum: ${new Date().toLocaleString("nl-NL")}`, `Programma: Vereffening webapp ${meta.version || ""} (kleinste kwadraten, Delftse toetsing, RDNAPTRANS™2018)`);
+    L.push(`VEREFFENINGSRAPPORT – ${meta.name || "project"}`, `Datum: ${new Date().toLocaleString("nl-NL")}`, `Programma: Vereffening webapp ${meta.version || ""} (kleinste kwadraten, Delftse toetsing, transformatie ETRS89 ↔ RD/NAP)`);
     const S = project.settings;
     L.push(`Toetsing: α0 = ${S.alpha0}, β0 = ${S.beta0}  (B-methode)`, "");
     results.forEach((R) => {
