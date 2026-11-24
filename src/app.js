@@ -3,7 +3,10 @@
 (function (V) {
   "use strict";
   const M = V.M;
-  const VERSION = "1.1";
+  const VERSION = "1.2";
+  const THEME_KEY = "vereffening.thema";
+  const PRESET_KEY = "vereffening.exportvoorinstellingen";
+  const THEMES = [["modern", "Modern", "In de stijl van de NLCS-handleidingen", true], ["classic", "Classic", "De oorspronkelijke stijl van de app"], ["veldwerk", "Veldwerk", "Warm en rond, zoals de Veldwerk-app"], ["veldwerk-donker", "Veldwerk donker", "Zelfde stijl in donker: prettig bij weinig licht"]];
   const LS_KEY = "vereffening.project.v1";
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -18,10 +21,10 @@
   let RES = [];          // rekenresultaten per stap
   let PROJ = null;
   let TRANS = null;
-  const UI = { view: "stappen", stage: 0, tab: "bestanden", dim: "2D", phase: "aansluitend", pfilter: "alle", psearch: "", showAllObs: false, settingsTarget: "project", mapLayers: { punten: true, nummers: true, waarnemingen: true, gnss: true, verworpen: true, ellipsen: true, raster: false }, ellScale: "auto", dxfVisible: true, dxf3d: true, exp: null };
+  const UI = { pending: [], unsaved: false, fh: null, modal: null, themeOpen: false, psel: new Set(), view: "stappen", stage: 0, tab: "bestanden", dim: "2D", phase: "aansluitend", pfilter: "alle", psearch: "", showAllObs: false, settingsTarget: "project", mapLayers: { punten: true, nummers: true, waarnemingen: true, gnss: true, verworpen: true, ellipsen: true, raster: false }, ellScale: "auto", dxfVisible: true, dxf3d: true, exp: null };
 
   function defaultProject() {
-    return { version: VERSION, name: "Nieuw project", settings: V.defaultSettings(), stages: [], codes: V.CODELIST || { name: "", codes: {} }, exportOpts: null };
+    return { version: VERSION, name: "Nieuw project", settings: V.defaultSettings(), stages: [], codes: V.CODELIST || { name: "", codes: {} }, exportOpts: null, corrections: [], csv: null };
   }
   const codeDesc = (c) => (c && S.codes && S.codes.codes[c]) || "";
   const ROLE = { 900: "nap", 515: "nap", 906: "opstelplaats", 907: "grondslag", 909: "grondslag", 910: "grondslag", 911: "hoogte" };
@@ -38,6 +41,7 @@
     p.settings = Object.assign(V.defaultSettings(), p.settings || {});
     p.codes = p.codes && p.codes.codes ? p.codes : V.CODELIST || { name: "", codes: {} };
     p.stages = (p.stages || []).map((s) => Object.assign(V.newStage(s.name), s));
+    p.corrections = Array.isArray(p.corrections) ? p.corrections : [];
     return p;
   }
 
@@ -52,26 +56,42 @@
   function compute() {
     PROJ = new V.Project(getTrans(), S.settings);
     PROJ.stages = S.stages;
+    PROJ.corrections = S.corrections || [];
     const t0 = performance.now();
     try { RES = PROJ.run(); } catch (e) { RES = []; toast("Fout bij rekenen: " + e.message); console.error(e); }
     UI.lastMs = performance.now() - t0;
+    UI.pending = [];
   }
-  let pending = null;
+  // Rekenen gebeurt alleen met de knop Herberekenen (en bij het openen van een project).
+  // Elke wijziging komt in de lijst UI.pending; de oude uitkomst blijft grijs zichtbaar.
   function changed(opts = {}) {
     save();
-    if (opts.norecalc) { render(); return; }
+    UI.unsaved = true;
+    if (!opts.norecalc) {
+      const why = opts.why || UI._why || "wijziging";
+      UI.pending = UI.pending.filter((w) => w !== why);
+      UI.pending.push(why);
+    }
+    render();
+  }
+  function recalc(msg) {
     const b = document.getElementById("busy");
     if (b) b.hidden = false;
-    clearTimeout(pending);
-    pending = setTimeout(() => { compute(); render(); const bb = document.getElementById("busy"); if (bb) bb.hidden = true; }, 30);
+    requestAnimationFrame(() => setTimeout(() => {
+      compute(); render();
+      if (msg !== false) toast(msg || `Doorgerekend in ${nl((UI.lastMs || 0) / 1000, 1)} s`, 2200);
+    }, 20));
   }
   function toast(t, ms = 3500) {
+    document.querySelectorAll(".toast").forEach((t0) => t0.remove());
     const el = document.createElement("div");
     el.className = "toast"; el.textContent = t; document.body.appendChild(el);
     setTimeout(() => el.remove(), ms);
   }
   const curStage = () => S.stages[UI.stage];
-  const curRes = () => RES[UI.stage];
+  // resultaten horen bij het stap-object, zodat verschuiven of verwijderen vóór het herberekenen niets door elkaar haalt
+  const resOf = (st) => (st ? RES.find((r) => r && r.stage === st) : undefined);
+  const curRes = () => resOf(curStage());
 
   // ------------------------------------------------------------- bestanden
   function decode(buf) {
@@ -137,8 +157,14 @@
       n++;
     }
     UI.view = "stap"; UI.stage = stageIdx; UI.tab = "bestanden";
-    if (n) toast(`${n} bestand${n > 1 ? "en" : ""} toegevoegd aan ${st.name}`);
-    changed();
+    if (!n) { render(); return; }
+    toast(`${n} bestand${n > 1 ? "en" : ""} toegevoegd aan ${st.name}`);
+    if (S.name === "Nieuw project" && !S.nameAsked) {
+      S.nameAsked = true;
+      const sg0 = suggestName(files.map((f) => f.name));
+      UI.modal = { kind: "name", first: true, name: sg0.name, from: sg0.from };
+    }
+    changed({ why: `${n} bestand${n > 1 ? "en" : ""} toegevoegd aan ${st.name}` });
   }
   function loadCodelist(text, name) {
     try {
@@ -215,7 +241,7 @@
     const net = R.net, c = R.checks;
     for (const [n, p] of Object.entries(net.points)) {
       if (p.code === "HI") continue;
-      out[n] = { name: n, code: p.code || "", gnss: new Set(), tps: new Set(), wp: false, status_xy: p.status_xy, status_h: p.status_h, notes: [], res: R.coords[n] };
+      out[n] = { name: n, code: p.code || "", was: p.was || "", code_was: p.code_was, gnss: new Set(), tps: new Set(), wp: false, status_xy: p.status_xy, status_h: p.status_h, notes: [], res: R.coords[n] };
     }
     for (const o of net.obs) {
       const a = out[o.frm], b = out[o.to];
@@ -232,28 +258,39 @@
     for (const p of Object.values(out)) if (p.code === "906") p.notes.push({ cls: "", t: "Opstelpunt · standaard niet in export" });
     return out;
   }
-  const curStageOf = (R) => S.stages.find((s) => s.name === R.name);
+  const curStageOf = (R) => (R && R.stage) || S.stages.find((s) => s.name === R.name);
   const allResults = () => RES.filter((r) => r && !r.error);
 
   // ------------------------------------------------------------- render
   const ICON = {
-    logo: '<svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#7FB8E8" stroke-width="2" aria-hidden="true"><path d="M4 22 L14 5 L24 22 Z"/><circle cx="14" cy="5" r="2.5" fill="#7FB8E8"/><circle cx="4" cy="22" r="2.5" fill="#7FB8E8"/><circle cx="24" cy="22" r="2.5" fill="#7FB8E8"/></svg>',
-    expand: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15202B" stroke-width="2" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
-    ext: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15202B" stroke-width="2" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+    logo: '<svg width="28" height="28" viewBox="0 0 28 28" fill="none" style="stroke:var(--logo)" stroke-width="2" aria-hidden="true"><path d="M4 22 L14 5 L24 22 Z"/><circle cx="14" cy="5" r="2.5" style="fill:var(--logo)"/><circle cx="4" cy="22" r="2.5" style="fill:var(--logo)"/><circle cx="24" cy="22" r="2.5" style="fill:var(--logo)"/></svg>',
+    chev: '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
+    expand: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+    ext: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+    refresh: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   };
   function header() {
     const inStage = UI.view === "stap" && curStage();
     let nav;
     if (inStage) {
-      nav = `<nav class="crumb" aria-label="Waar ben ik"><button class="nav-link" data-act="view" data-v="stappen" style="background:none;border:0;color:#C9D3DC;padding:10px 4px;min-height:44px">Stappen</button><span class="sep">›</span>
+      nav = `<nav class="crumb" aria-label="Waar ben ik"><button class="nav-link" data-act="view" data-v="stappen">Stappen</button><span class="sep">›</span>
         <label><span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden">Stap kiezen</span><select data-act="pickstage">${S.stages.map((s, i) => `<option value="${i}" ${i === UI.stage ? "selected" : ""}>Stap ${i + 1} · ${esc(s.name)}</option>`).join("")}</select></label></nav>
         <nav class="nav" aria-label="Schermen van deze stap">${[["bestanden", "Bestanden"], ["punten", "Punten"], ["vereffening", "Vereffening"], ["export", "Export"]].map(([k, l]) => `<button class="${UI.tab === k ? "on" : ""}" data-act="tab" data-v="${k}">${l}</button>`).join("")}</nav>`;
     } else {
-      nav = `<nav class="nav">${[["stappen", "Stappen"], ["controles", "Controles"], ["instellingen", "Instellingen"]].map(([k, l]) => `<button class="${UI.view === k ? "on" : ""}" data-act="view" data-v="${k}">${l}</button>`).join("")}</nav>`;
+      nav = `<nav class="nav" aria-label="Hoofdmenu">${[["stappen", "Stappen"], ["controles", "Controles"], ["instellingen", "Instellingen"]].map(([k, l]) => `<button class="${UI.view === k ? "on" : ""}" data-act="view" data-v="${k}">${l}</button>`).join("")}</nav>`;
     }
-    return `<header class="top noprint"><button class="logo" data-act="view" data-v="stappen">${ICON.logo} Vereffening</button>${nav}
-      <div class="projbox">Project: <button class="pname" data-act="rename-project" title="Naam wijzigen">${esc(S.name)}</button> · offline
-        <button data-act="save-file" title="Project als bestand opslaan">Opslaan</button><button data-act="open-file" title="Projectbestand openen">Openen</button><button data-act="new-project">Nieuw</button></div></header>`;
+    const np = UI.pending.length;
+    return `<header class="top noprint"><button class="logo" data-act="theme-menu" aria-haspopup="menu" aria-expanded="${UI.themeOpen}" title="Weergave kiezen">${ICON.logo} Vereffening ${ICON.chev}</button>${nav}
+      <div class="projbox">Project: <button class="pname" data-act="rename-project" title="Naam wijzigen">${esc(S.name)}</button>${UI.unsaved ? '<span class="dot" title="Er zijn wijzigingen die nog niet in een projectbestand zijn opgeslagen" aria-label="niet opgeslagen"></span>' : ""}
+        ${S.stages.length ? `<button class="recalc" data-act="recalc" title="Alle stappen opnieuw rekenen">${ICON.refresh} Herberekenen${np ? `<span class="n">${np}</span>` : ""}</button>` : ""}
+        <button data-act="save-file" title="${UI.fh ? `Opslaan in ${esc(UI.fh.name)}` : "Project als bestand opslaan"}">Opslaan</button><button data-act="save-as">Opslaan als…</button><button data-act="open-file" title="Projectbestand openen">Openen</button><button data-act="new-project">Nieuw</button></div></header><div class="stripe noprint"></div>`;
+  }
+  function staleBar() {
+    const np = UI.pending.length;
+    if (!np || !S.stages.length) return "";
+    const list = UI.pending.slice(-4).map(esc).join(" · ") + (np > 4 ? ` · en ${np - 4} meer` : "");
+    return `<div class="stalebar noprint" role="status"><div><div class="what"><b>${np} wijziging${np > 1 ? "en" : ""} nog niet doorgerekend.</b> ${list}. De uitkomsten hieronder zijn van de vorige berekening.</div>
+      <button class="btn sm" data-act="pending-clear" title="Lijst leegmaken zonder te rekenen">Negeren</button><button class="btn pri" data-act="recalc">${ICON.refresh} Herberekenen</button></div></div>`;
   }
   function render() {
     const app = document.getElementById("app");
@@ -267,8 +304,34 @@
       else if (UI.view === "instellingen") body = viewInstellingen();
     } catch (e) { console.error(e); body = `<div class="msg bad">Interne fout bij tonen: ${esc(e.message)}</div>`; }
     const saveWarn = UI.saveErr ? `<div class="msg warn small">Dit project is te groot om automatisch in de browser te bewaren. Gebruik <b>Opslaan</b> om het als bestand te bewaren.</div>` : "";
-    app.innerHTML = header() + `<main>${saveWarn}${body}</main><div id="busy" class="busy" hidden>Rekenen…</div>`;
+    const y = window.scrollY;
+    app.innerHTML = header() + staleBar() + `<main class="${UI.pending.length && RES.length ? "stale" : ""}">${saveWarn}${body}</main><div id="busy" class="busy" hidden><div>Rekenen…</div></div>` + modalHTML() + themePop();
+    if (UI.keepScroll) { window.scrollTo(0, y); UI.keepScroll = false; }
     afterRender();
+  }
+  const noRes = (R) => `<div class="msg ${R && R.error ? "bad" : "warn"}">${R && R.error ? esc(R.error) : "Nog geen berekening voor deze stap."} ${UI.pending.length || !R ? `<button class="btn sm pri" data-act="recalc">Herberekenen</button>` : ""}</div>`;
+
+  // ------------------------------------------------------------- stijl (logo-menu)
+  const curTheme = () => document.documentElement.dataset.theme || "modern";
+  function applyTheme(t) {
+    if (!THEMES.some((x) => x[0] === t)) t = "modern";
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* privé-modus */ }
+    const m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.content = { modern: "#0b2545", classic: "#15202B", veldwerk: "#F6F2EC", "veldwerk-donker": "#1D1B19" }[t];
+  }
+  const PV = {
+    modern: '<i style="height:14px;background:#0b2545"></i><i style="height:3px;width:60%;background:#6fae2b"></i><i style="flex:1;background:#f4f6f9;display:flex;gap:4px;padding:5px"><i style="flex:1;background:#fff;border-radius:2px"></i><i style="flex:1;background:#fff;border-radius:2px"></i></i>',
+    classic: '<i style="height:14px;background:#15202B"></i><i style="flex:1;background:#F4F6F8;display:flex;gap:4px;padding:5px"><i style="flex:1;background:#fff;border-radius:2px;border-top:3px solid #0B5FA5"></i><i style="flex:1;background:#fff;border-radius:2px"></i></i>',
+    veldwerk: '<i style="height:14px;background:#FFFDF9;border-bottom:1px solid #E7DFD5;display:flex;align-items:center;padding-left:5px"><i style="width:18px;height:5px;border-radius:99px;background:#2B2724"></i></i><i style="flex:1;background:#F6F2EC;display:flex;gap:4px;padding:5px"><i style="flex:1;background:#FFFDF9;border-radius:4px;border:1px solid #E7DFD5"></i><i style="flex:1;background:#C4532B;border-radius:4px"></i></i>',
+    "veldwerk-donker": '<i style="height:14px;background:#272421;border-bottom:1px solid #3A3530;display:flex;align-items:center;padding-left:5px"><i style="width:18px;height:5px;border-radius:99px;background:#F1ECE6"></i></i><i style="flex:1;background:#1D1B19;display:flex;gap:4px;padding:5px"><i style="flex:1;background:#272421;border-radius:4px;border:1px solid #3A3530"></i><i style="flex:1;background:#E8875F;border-radius:4px"></i></i>',
+  };
+  function themePop() {
+    if (!UI.themeOpen) return "";
+    const cur = curTheme();
+    return `<div class="themepop" role="menu" aria-label="Weergave" id="themepop"><div class="hd"><div class="kick">Weergave</div><div class="small muted" style="margin-top:2px">Alleen het uiterlijk verandert; je project en uitkomsten blijven hetzelfde.</div></div>
+      <div class="opts">${THEMES.map(([k, l, d, std]) => `<button class="opt ${cur === k ? "on" : ""}" role="menuitemradio" aria-checked="${cur === k}" data-act="theme" data-v="${k}"><span class="pv" aria-hidden="true">${PV[k]}</span><span class="grow"><b>${l}</b>${std ? ' <span class="badge ok" style="margin-left:4px">standaard</span>' : ""}<br><span class="small muted">${d}</span></span>${cur === k ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : ""}</button>`).join("")}</div>
+      <div class="ft">Je keuze wordt onthouden op dit apparaat. Versie ${VERSION}.</div></div>`;
   }
 
   // ------------------------------------------------------------- Stappen
@@ -281,27 +344,27 @@
         <div class="small muted">Alles blijft op dit apparaat. Er wordt niets verstuurd.</div></div>`;
     }
     const cards = S.stages.map((st, i) => {
-      const R = RES[i], s = stageStatus(R), W = stageWarnings(R);
+      const R = resOf(st), s = stageStatus(R), W = stageWarnings(R);
       const nrules = st.known.filter((r) => !r.disabled).length;
       return `<article class="stage ${i === UI.stage ? "sel" : ""}" data-act="selstage" data-i="${i}">
         <div class="row"><span class="num">${i + 1}</span><h2 class="grow">${esc(st.name)}</h2></div>
-        <div class="st ${s.cls === "ok" ? "" : ""}" style="color:${s.cls === "ok" ? "var(--ok)" : s.cls === "bad" ? "var(--bad)" : "var(--mut)"}">${esc(s.text)}</div>
+        <div class="st resv" style="color:${s.cls === "ok" ? "var(--ok)" : s.cls === "bad" ? "var(--bad)" : "var(--mut)"}">${esc(s.text)}</div>
         <div>${st.sources.map((x) => `<div class="src"><span class="badge ${x.disabled ? "" : "blue"}">${esc(x.tag || x.kind)}</span><span class="n ${x.disabled ? "muted" : ""}">${esc(x.name)}${x.disabled ? " (uit)" : ""}</span></div>`).join("") || '<span class="muted small">Nog geen bestanden</span>'}</div>
         <div class="small muted">${nrules ? `${nrules} regel${nrules > 1 ? "s" : ""} voor bekende punten` : "Geen regels voor bekende punten"}${st.snooping ? ` · data snooping max ${st.snooping}` : ""}${st.gnss_heights === "controle" ? " · GNSS-hoogte alleen controle" : ""}</div>
-        ${W.slice(0, 5).map((w) => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}${W.length > 5 ? `<div class="small muted">… en ${W.length - 5} meer (zie Controles)</div>` : ""}
-        ${R && !R.error ? `<div class="levert"><b>Levert</b> · ${esc(delivers(R))}</div>` : ""}
+        <div class="resv">${W.slice(0, 5).map((w) => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}${W.length > 5 ? `<div class="small muted">… en ${W.length - 5} meer (zie Controles)</div>` : ""}</div>
+        ${R && !R.error ? `<div class="levert resv"><b>Levert</b> · ${esc(delivers(R))}</div>` : ""}
         <div class="row" style="margin-top:auto"><button class="btn sm pri" data-act="openstage" data-i="${i}">Openen</button><button class="btn sm" data-act="rename-stage" data-i="${i}">Naam</button>
           <button class="btn sm" data-act="move-stage" data-i="${i}" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="Naar voren">←</button><button class="btn sm" data-act="move-stage" data-i="${i}" data-d="1" ${i === S.stages.length - 1 ? "disabled" : ""} aria-label="Naar achteren">→</button>
           <button class="btn sm danger" data-act="del-stage" data-i="${i}">Verwijderen</button></div></article>`;
     }).join("");
     return `<div class="row"><div class="grow"><h1>Stappen</h1><div class="muted">Elke stap wordt apart vereffend en kan bekende punten leveren aan de volgende stap.</div></div>
-      <button class="btn" data-act="add-stage">+ Stap toevoegen</button><button class="btn pri" data-act="recalc">Alles opnieuw rekenen</button></div>
+      <button class="btn" data-act="add-stage">+ Stap toevoegen</button><button class="btn pri" data-act="recalc">${ICON.refresh} Herberekenen</button></div>
       <div class="stages">${cards}</div>${rulesEditor()}`;
   }
   function rulesEditor() {
     const st = curStage();
     if (!st) return "";
-    const R = RES[UI.stage];
+    const R = curRes();
     const prevNames = S.stages.slice(0, UI.stage).map((s) => s.name);
     const codes = [...new Set(Object.values((R && R.net && R.net.points) || {}).map((p) => p.code).filter((c) => c && c !== "HI"))].sort(natural);
     const found = (i) => { const x = R && R.checks && R.checks.rules.find((q) => q.rule === st.known[i]); return x ? x.names.length : null; };
@@ -362,7 +425,8 @@
       ${st.sources.length ? `<section class="card">${list}</section>` : ""}
       ${R && R.error ? `<div class="msg bad"><b>Deze stap kan niet worden berekend:</b> ${esc(R.error)}</div>` : ""}
       <section class="card"><div class="row"><span class="badge">${rules.length ? (UI.stage ? "UIT EERDERE STAPPEN / LIJST" : "BEKENDE PUNTEN") : "GEEN BEKENDE PUNTEN"}</span><div class="grow">${rules.map((r) => `${esc(Array.isArray(r.points) ? r.points.join(", ") : r.points)}${r.codes && r.codes.length ? " (code " + esc(r.codes.join(",")) + ")" : ""}: ${r.dim} ${r.mode === "vast_getoetst" ? "vast, wel toetsen" : r.mode} uit ${r.origin === "lijst" ? "lijst/job" : esc(r.origin)}`).join(" · ") || '<span class="muted">Er zijn geen regels; het netwerk ligt vast via GNSS of wordt vrij vereffend.</span>'}</div><button class="btn sm" data-act="view" data-v="stappen">Regels wijzigen</button></div></section>
-      ${stats.length ? `<section class="card"><h2>Wat er is ingelezen</h2><div class="grid2" style="margin-top:10px">${stats.map(([l, n, s]) => `<div><div class="small muted">${l}</div><div class="mono" style="font-size:22px">${n}</div><div class="small muted">${esc(s)}</div></div>`).join("")}</div></section>` : ""}
+      ${!R && st.sources.length ? `<div class="msg info">De bestanden zijn toegevoegd. Druk op <b>Herberekenen</b> om ze in te lezen en te vereffenen. <button class="btn sm pri" data-act="recalc">Herberekenen</button></div>` : ""}
+      ${stats.length ? `<section class="card resv"><h2>Wat er is ingelezen</h2><div class="grid2" style="margin-top:10px">${stats.map(([l, n, s]) => `<div><div class="small muted">${l}</div><div class="mono" style="font-size:22px">${n}</div><div class="small muted">${esc(s)}</div></div>`).join("")}</div></section>` : ""}
       ${pre.length ? `<section class="msg warn"><b>Voorcontrole</b>${pre.map((g) => `<div class="row" style="margin-top:6px"><span class="grow">${esc(g.station)} → ${esc(g.doel)} wijkt ${nl(g.afwijking_m, 2)} m af ${g.kept ? "(toch gebruikt)" : "en is uitgeschakeld"}.${g.past_op ? ` Past op <b>${esc(g.past_op)}</b> (${nl(g.past_afstand_m * 1000, 0)} mm): verkeerd puntnummer?` : ""}</span>${g.past_op && !g.kept ? `<button class="btn sm" data-act="rename" data-ref="${esc(g.ref)}" data-from="${esc(g.doel)}" data-to="${esc(g.past_op)}">Hernoemen naar ${esc(g.past_op)}</button>` : ""}<button class="btn sm" data-act="precheck-keep" data-ref="${esc(g.ref)}">${g.kept ? "Weer uitschakelen" : "Toch gebruiken"}</button></div>`).join("")}</section>` : ""}
       ${stageOptions(st)}
       <div class="foot"><button class="btn" data-act="view" data-v="stappen">← Stappen</button><button class="btn pri" data-act="tab" data-v="punten">Verder naar punten →</button></div>`;
@@ -385,40 +449,122 @@
   // ------------------------------------------------------------- Punten
   function viewPunten() {
     const st = curStage(), R = curRes();
-    if (!R || R.error || !R.net) return `<h1>Punten en status</h1><div class="msg warn">Nog geen berekening voor deze stap. Voeg eerst bestanden toe.</div>`;
+    if (!R || R.error || !R.net) return `<h1>Punten en status</h1>${noRes(R)}${corrCard()}`;
     const info = pointInfo(R);
     let pts = Object.values(info).sort((a, b) => natural(a.name, b.name));
     const codes = [...new Set(pts.map((p) => p.code).filter(Boolean))].sort(natural);
     const total = pts.length;
     if (UI.pfilter === "meldingen") pts = pts.filter((p) => p.notes.some((n) => n.cls === "warn") || p.status_xy !== "vrij" || p.status_h !== "vrij");
+    else if (UI.pfilter === "gecorrigeerd") pts = pts.filter((p) => p.was || p.code_was !== undefined);
     else if (UI.pfilter.startsWith("code:")) pts = pts.filter((p) => p.code === UI.pfilter.slice(5));
     if (UI.psearch) pts = pts.filter((p) => p.name.toLowerCase().includes(UI.psearch.toLowerCase()));
+    for (const n of [...UI.psel]) if (!info[n]) UI.psel.delete(n);
     const ruleTxt = st.known.filter((r) => !r.disabled).map((r) => { const x = R.checks.rules.find((q) => q.rule === r); return `${x ? x.names.length : 0} punt(en) ${esc(Array.isArray(r.points) ? r.points.join(", ") : r.points)}: ${r.dim} ${r.mode === "vast_getoetst" ? "vast, wel toetsen" : r.mode} uit ${r.origin === "lijst" ? "lijst/job" : esc(r.origin)}`; }).join(" · ");
     const nap = Object.values(info).filter((p) => ROLE[p.code] === "nap" && p.status_h === "vrij");
     const segBtn = (n, key, cur) => `<div class="seg sm">${["vrij", "vast", "gewogen"].map((m) => `<button class="${cur === m ? "on " + m : ""}" data-act="ovr" data-n="${esc(n)}" data-k="${key}" data-v="${m}">${m}</button>`).join("")}</div>`;
     const ovs = st.overrides || {};
-    const rows = pts.slice(0, 400).map((p) => {
+    const shown = pts.slice(0, 400);
+    const allSel = shown.length && shown.every((p) => UI.psel.has(p.name));
+    const rows = shown.map((p) => {
       const src = [];
       if (p.gnss.size) src.push(`<span class="badge blue">GNSS ×${p.gnss.size}</span>`);
       if (p.wp) src.push('<span class="badge">WP</span>');
       if (p.tps.size) src.push(`<span class="badge">TPS ×${p.tps.size}</span>`);
       const c = p.res || {};
       const sd = c.sx !== undefined ? (Math.max(c.sx, c.sy) > 0 ? `σ ${mm(Math.max(c.sx, c.sy))} mm` : "vast") : "";
-      return `<tr><td class="mono" style="font-weight:600">${esc(p.name)}</td><td>${esc(p.code)} <span class="small muted">${esc(codeDesc(p.code))}</span></td><td>${src.join(" ")}</td>
+      const sel = UI.psel.has(p.name);
+      return `<tr class="${sel ? "sel" : ""}"><td class="ck"><input type="checkbox" data-psel="${esc(p.name)}" ${sel ? "checked" : ""} aria-label="${esc(p.name)} selecteren"></td>
+        <td><button class="linkbtn" data-act="ren-point" data-n="${esc(p.name)}" title="Puntnummer wijzigen (hele project)">${esc(p.name)}</button>${p.was ? `<span class="badge was">was ${esc(p.was)}</span>` : ""}</td>
+        <td>${esc(p.code)} <span class="small muted">${esc(codeDesc(p.code))}</span>${p.code_was !== undefined ? `<span class="badge was">was ${esc(p.code_was || "–")}</span>` : ""}</td><td>${src.join(" ")}</td>
         <td>${segBtn(p.name, "xy", p.status_xy)}<div class="small muted">${sd}${c.x === undefined ? " geen ligging" : ""}</div></td>
         <td>${segBtn(p.name, "h", p.status_h)}<div class="small muted">${c.sH !== undefined ? (c.sH > 0 ? `σH ${mm(c.sH)} mm` : "vast") : "geen hoogte"}</div></td>
         <td class="small">${p.notes.map((n) => `<div style="color:${n.cls === "warn" ? "var(--warn)" : "var(--mut)"}">${esc(n.t)}</div>`).join("")}${ovs[p.name] ? `<button class="btn sm" data-act="ovr-reset" data-n="${esc(p.name)}">Terug naar regels</button>` : ""}</td></tr>`;
     }).join("");
-    return `<div class="row"><div class="grow"><h1>Punten en status</h1><div class="muted">Status volgt uit de regels van deze stap; per punt kun je afwijken. Vast doet niet mee, gewogen wordt meegetoetst.</div></div></div>
-      <div class="row"><div class="seg">${[["alle", `Alle ${total} punten`], ["meldingen", "Alleen meldingen en bekende"]].map(([k, l]) => `<button class="${UI.pfilter === k ? "on" : ""}" data-act="pfilter" data-v="${k}">${l}</button>`).join("")}</div>
+    const nsel = UI.psel.size;
+    const allCodes = [...new Set([...Object.keys((S.codes && S.codes.codes) || {}), ...codes])].sort(natural);
+    const selbar = nsel ? `<div class="selbar"><b>${nsel} punt${nsel > 1 ? "en" : ""} geselecteerd</b>
+        <label class="row" style="gap:6px">Code geven <select data-act="selcode"><option value="">kies…</option>${allCodes.map((c) => `<option value="${esc(c)}" ${UI.selCode === c ? "selected" : ""}>${esc(c)} ${esc(codeDesc(c))}</option>`).join("")}<option value="__eigen">andere code…</option></select></label>
+        <button class="btn sm pri" data-act="code-apply" ${UI.selCode ? "" : "disabled"}>Toepassen</button>${nsel === 1 ? `<button class="btn sm" data-act="ren-point" data-n="${esc([...UI.psel][0])}">Puntnummer wijzigen…</button>` : ""}<button class="btn sm" data-act="psel-clear">Selectie wissen</button></div>` : "";
+    return `<div class="row"><div class="grow"><h1>Punten en status</h1><div class="muted">Status volgt uit de regels van deze stap; per punt kun je afwijken. Vast doet niet mee, gewogen wordt meegetoetst. Codes en puntnummers corrigeer je hier voor het <b>hele project</b>.</div></div></div>
+      <div class="row"><div class="seg">${[["alle", `Alle ${total} punten`], ["meldingen", "Alleen meldingen en bekende"], ["gecorrigeerd", "Gecorrigeerd"]].map(([k, l]) => `<button class="${UI.pfilter === k ? "on" : ""}" data-act="pfilter" data-v="${k}">${l}</button>`).join("")}</div>
         <select class="inl" data-act="pfilter-code" style="min-height:40px"><option value="">Code…</option>${codes.map((c) => `<option value="${esc(c)}" ${UI.pfilter === "code:" + c ? "selected" : ""}>${esc(c)} ${esc(codeDesc(c))}</option>`).join("")}</select>
         <input class="inl" style="min-height:40px" placeholder="Zoek punt" data-act="psearch" value="${esc(UI.psearch)}"></div>
       <div class="msg info small"><b>Regels toegepast:</b> ${ruleTxt || "geen"} <button class="btn sm" data-act="view" data-v="stappen">Regels</button></div>
       ${nap.length ? `<div class="msg warn small">Er ${nap.length === 1 ? "is" : "zijn"} ${nap.length} punt(en) met een NAP-code (${nap.map((p) => esc(p.name)).join(", ")}) die nog niet vast staan. <button class="btn sm" data-act="nap-rule">Regel toevoegen: NAP-punten 1D vast</button></div>` : ""}
-      <section class="card tight"><div class="tablewrap"><table><thead><tr><th>Punt</th><th>Code</th><th>Bepaald met</th><th>Ligging (x, y)</th><th>Hoogte (H)</th><th>Opmerking</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="small muted" style="padding:8px 12px">${Math.min(pts.length, 400)} van ${total} punten getoond · GNSS ×2 = twee bezettingen · TPS ×n = aantal opstellingen · WP = waterpassing. Handmatig gewogen gebruikt σ ${nl(S.settings.default_sxy_mm || 10, 0)} mm (ligging) / ${nl(S.settings.default_sh_mm || 2, 0)} mm (hoogte) en de huidige coördinaten van het punt.</div></section>
+      ${selbar}
+      <section class="card tight"><div class="tablewrap"><table><thead><tr><th class="ck"><input type="checkbox" data-act="psel-all" ${allSel ? "checked" : ""} aria-label="Alle getoonde punten selecteren"></th><th>Punt</th><th>Code</th><th>Bepaald met</th><th>Ligging (x, y)</th><th>Hoogte (H)</th><th>Opmerking</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="small muted" style="padding:8px 12px">${Math.min(pts.length, 400)} van ${total} punten getoond · tik op een puntnummer om het te hernoemen · GNSS ×2 = twee bezettingen · TPS ×n = aantal opstellingen · WP = waterpassing. Handmatig gewogen gebruikt σ ${nl(S.settings.default_sxy_mm || 10, 0)} mm (ligging) / ${nl(S.settings.default_sh_mm || 2, 0)} mm (hoogte) en de huidige coördinaten van het punt.</div></section>
+      ${corrCard()}
       <div class="foot"><button class="btn" data-act="tab" data-v="bestanden">← Bestanden</button><button class="btn pri" data-act="tab" data-v="vereffening">Vereffenen →</button></div>`;
   }
+  // ------------------------------------------------------------- correcties (hele project)
+  function corrCard(inControles) {
+    const C = S.corrections || [];
+    if (!C.length) return inControles ? "" : "";
+    const obsCount = (n) => RES.reduce((k, r) => k + (r && r.net ? r.net.obs.filter((o) => o.meta && o.meta.was === n).length : 0), 0);
+    const rows = C.map((c) => `<div class="corr"><span class="badge ${c.type === "naam" ? "warn" : "blue"}">${c.type === "naam" ? "PUNTNUMMER" : "CODE"}</span>
+      <span class="grow">${c.type === "naam" ? `<span class="mono">${esc(c.from)}</span> → <b class="mono">${esc(c.to)}</b> <span class="small muted">· ${obsCount(c.from)} waarnemingen</span>` : `<b class="mono">${esc(c.punt)}</b> · ${esc(c.from || "–")} → <b>${esc(c.to || "–")}</b> <span class="small muted">${esc(codeDesc(c.to))}</span>`}</span>
+      <button class="btn sm" data-act="corr-undo" data-id="${esc(c.id)}">Ongedaan maken</button></div>`).join("");
+    return `<section class="card"><div class="row"><h2 class="grow">Correcties in dit project (${C.length})</h2>${C.length > 1 ? `<button class="btn sm danger" data-act="corr-clear">Alles ongedaan maken</button>` : ""}</div>
+      <p class="help" style="margin:4px 0 6px">Een correctie geldt in alle stappen en alle waarnemingen. De ingelezen bestanden blijven ongewijzigd; alle correcties staan ook in het rapport.</p>${rows}</section>`;
+  }
+  const hasCodeRules = () => S.stages.some((st) => st.known.some((r) => !r.disabled && r.codes && r.codes.length));
+  function patchCodes(map) {
+    // code-wijziging zonder herberekening: de uitkomsten blijven gelijk, alleen het label verandert
+    for (const r of RES) {
+      if (!r || !r.net) continue;
+      for (const [n, c] of Object.entries(map)) {
+        const p = r.net.points[n];
+        if (!p) continue;
+        if (c.undo) { if (p.code_was !== undefined) { p.code = p.code_was; delete p.code_was; } }
+        else { if (p.code_was === undefined) p.code_was = p.code; p.code = c.to; if (p.code === p.code_was) delete p.code_was; }
+        if (r.coords[n]) r.coords[n].code = p.code;
+      }
+    }
+  }
+  function originalCode(n) {
+    const prev = (S.corrections || []).find((c) => c.type === "code" && c.punt === n);
+    if (prev) return prev.from;
+    for (const r of RES) if (r && r.net && r.net.points[n]) return r.net.points[n].code_was !== undefined ? r.net.points[n].code_was : r.net.points[n].code;
+    return "";
+  }
+  function setCodes(names, code) {
+    const C = S.corrections, map = {};
+    for (const n of names) {
+      const from = originalCode(n);
+      const i = C.findIndex((c) => c.type === "code" && c.punt === n);
+      if (i >= 0) C.splice(i, 1);
+      if (code !== from) C.push({ id: uid(), type: "code", punt: n, from, to: code });
+      map[n] = { to: code };
+    }
+    const why = `code ${names.length > 3 ? names.length + " punten" : names.join(", ")} → ${code || "geen"}`;
+    if (hasCodeRules()) changed({ why });
+    else { patchCodes(map); changed({ norecalc: true }); toast(`Code aangepast: ${why.slice(5)}`); }
+  }
+  function renameRefs(from, to) {
+    for (const st of S.stages) {
+      for (const r of st.known) if (Array.isArray(r.points)) r.points = r.points.map((x) => (x === from ? to : x));
+      if (st.overrides && st.overrides[from]) { st.overrides[to] = st.overrides[from]; delete st.overrides[from]; }
+    }
+    for (const c of S.corrections) if (c.type === "code" && c.punt === from) c.punt = to;
+  }
+  function renamePoint(from, to) {
+    to = String(to || "").trim();
+    if (!to || to === from) return;
+    S.corrections.push({ id: uid(), type: "naam", from, to });
+    renameRefs(from, to);
+    UI.psel.delete(from);
+    changed({ why: `puntnummer ${from} → ${to}` });
+  }
+  function undoCorr(id) {
+    const i = S.corrections.findIndex((c) => c.id === id);
+    if (i < 0) return;
+    const [c] = S.corrections.splice(i, 1);
+    if (c.type === "naam") { renameRefs(c.to, c.from); changed({ why: `puntnummer ${c.from} terug` }); return; }
+    if (hasCodeRules()) changed({ why: `code ${c.punt} terug naar ${c.from || "geen"}` });
+    else { patchCodes({ [c.punt]: { undo: true } }); changed({ norecalc: true }); }
+  }
+  const pointExists = (n) => RES.some((r) => r && r.net && r.net.points[n]);
 
   // ------------------------------------------------------------- Vereffening
   function freeAdjust(R, dim) {
@@ -432,7 +578,7 @@
   }
   function viewVereffening() {
     const st = curStage(), R = curRes();
-    if (!R || R.error || !R.net) return `<h1>Vereffening en toetsing</h1><div class="msg ${R && R.error ? "bad" : "warn"}">${R && R.error ? esc(R.error) : "Nog geen berekening voor deze stap."}</div>`;
+    if (!R || R.error || !R.net) return `<h1>Vereffening en toetsing</h1>${noRes(R)}`;
     if (UI.dim === "2D" && !R.r2 && R.r1) UI.dim = "1D";
     if (UI.dim === "1D" && !R.r1 && R.r2) UI.dim = "2D";
     let res = UI.dim === "2D" ? R.r2 : R.r1;
@@ -451,18 +597,18 @@
     const maxEll = Object.entries(res.ellipse || {}).reduce((a, [n, e]) => (e[0] > a[1] ? [n, e[0]] : a), ["", 0]);
     const maxSH = UI.dim === "1D" ? Object.entries(res.sd).reduce((a, [n, s]) => (s > a[1] && R.net.points[n].code !== "HI" ? [n, s] : a), ["", 0]) : null;
     const blockCrit = T.obs_results.find((o) => o.resid.length === 2);
-    const kpi = `<div class="kpis">
+    const kpi = `<div class="kpis resv">
       <div class="kpi ${T.redundancy === 0 ? "" : T.F_ok ? "ok" : "bad"}"><div class="l">F-toets${test && UI.phase === "aansluitend" ? " (bekende punten gewogen)" : ""}</div><div class="v">${T.redundancy ? nl(T.F, 2) : "–"}</div><div class="s">${T.redundancy ? `${T.F_ok ? "Aanvaard" : "Verworpen"} · kritiek ${nl(T.F_crit, 2)}` : "niet toetsbaar (r = 0)"}</div></div>
       <div class="kpi"><div class="l">Overtalligheid</div><div class="v">${T.redundancy}</div><div class="s">${res.iterations} iteratie${res.iterations > 1 ? "s" : ""}${res.free ? " · vrij netwerk" : ""}</div></div>
       <div class="kpi ${nrej ? "bad" : ""}"><div class="l">Verworpen toetsen</div><div class="v">${nrej}</div><div class="s">kritiek w ${nl(T.obs_results[0] ? new V.Testing(S.settings.alpha0, S.settings.beta0).k_w : NaN, 2)}${blockCrit ? ` · GNSS/bekend T/b ${nl(blockCrit.w_crit, 2)}` : ""}</div></div>
       ${UI.dim === "2D" ? `<div class="kpi"><div class="l">Grootste ellips (1σ)</div><div class="v">${mm(maxEll[1])} mm</div><div class="s">${esc(maxEll[0])}</div></div>` : `<div class="kpi"><div class="l">Grootste σH</div><div class="v">${mm(maxSH[1], 2)} mm</div><div class="s">${esc(maxSH[0])}</div></div>`}</div>`;
     let msg;
     const rejSorted = T.obs_results.filter((o) => o.rejected).sort((a, b) => Math.abs(b.w) / b.w_crit - Math.abs(a.w) / a.w_crit);
-    if (T.redundancy === 0) msg = `<div class="msg warn"><b>Geen overtalligheid.</b> Er is niets te toetsen: de coördinaten volgen direct uit de metingen. Meet extra verbindingen of een tweede bezetting.</div>`;
-    else if (!nrej && T.F_ok) msg = `<div class="msg ok"><b>Geen verworpen waarnemingen.</b> ${(() => { const kp = T.obs_results.filter((o) => o.obs.kind === "XY" || o.obs.kind === "HH"); return kp.length ? `Alle ${kp.length} bekende punten passen als gewogen aansluitpunt (grootste toets ${nl(Math.max(...kp.map((o) => Math.abs(o.w)).filter(M.isNum), 0), 2)}).` : ""; })()}</div>`;
+    if (T.redundancy === 0) msg = `<div class="msg warn resv"><b>Geen overtalligheid.</b> Er is niets te toetsen: de coördinaten volgen direct uit de metingen. Meet extra verbindingen of een tweede bezetting.</div>`;
+    else if (!nrej && T.F_ok) msg = `<div class="msg ok resv"><b>Geen verworpen waarnemingen.</b> ${(() => { const kp = T.obs_results.filter((o) => o.obs.kind === "XY" || o.obs.kind === "HH"); return kp.length ? `Alle ${kp.length} bekende punten passen als gewogen aansluitpunt (grootste toets ${nl(Math.max(...kp.map((o) => Math.abs(o.w)).filter(M.isNum), 0), 2)}).` : ""; })()}</div>`;
     else {
       const w = rejSorted[0];
-      msg = `<div class="msg bad"><b>${nrej ? `${nrej} verworpen waarneming${nrej > 1 ? "en" : ""}.` : "F-toets verworpen."}</b> ${w ? `Grootste toets: ${esc(V.obsLabel(w.obs))} (${esc(w.obs.ref || "aansluiting")}), ${nl(w.w, 2)}. Controleer deze eerst; schakel hem uit in de tabel of zet data snooping aan.` : "De metingen passen samen minder goed dan de a-priori precisies zeggen. Controleer de precisies in Instellingen."} ${UI.phase === "aansluitend" ? `<button class="btn sm" data-act="snoop-on">${st.snooping ? `Data snooping staat op max. ${st.snooping}` : "Data snooping aanzetten (max. 5)"}</button>` : ""}</div>`;
+      msg = `<div class="msg bad resv"><b>${nrej ? `${nrej} verworpen waarneming${nrej > 1 ? "en" : ""}.` : "F-toets verworpen."}</b> ${w ? `Grootste toets: ${esc(V.obsLabel(w.obs))} (${esc(w.obs.ref || "aansluiting")}), ${nl(w.w, 2)}. Controleer deze eerst; schakel hem uit in de tabel of zet data snooping aan.` : "De metingen passen samen minder goed dan de a-priori precisies zeggen. Controleer de precisies in Instellingen."} ${UI.phase === "aansluitend" ? `<button class="btn sm" data-act="snoop-on">${st.snooping ? `Data snooping staat op max. ${st.snooping}` : "Data snooping aanzetten (max. 5)"}</button>` : ""}</div>`;
     }
     // uitgeschakeld
     const off = [];
@@ -482,14 +628,14 @@
     const orow = (r) => {
       const o = r.obs, known = o.kind === "XY" || o.kind === "HH";
       const ref = o.ref || "";
-      return `<tr class="${r.rejected ? "rej" : ""}"><td class="mono" style="font-size:13px">${esc(V.obsLabel(o))}${o.meta && o.meta.hernoemd ? ` <span class="badge warn">was ${esc(o.meta.hernoemd)}</span>` : ""}<div class="small muted">${esc(known ? "bekend punt (gewogen)" : ref)}${capNo.has(ref) ? ' · <span style="color:var(--warn)">Captivate: nee</span>' : ""}${o.meta && o.meta.faces === 1 ? " · 1 kijkerstand" : ""}</div></td>
+      return `<tr class="${r.rejected ? "rej" : ""}"><td class="mono" style="font-size:13px">${esc(V.obsLabel(o))}${o.meta && o.meta.hernoemd ? ` <span class="badge warn">was ${esc(o.meta.hernoemd)}</span>` : ""}${o.meta && o.meta.was ? ` <span class="badge was">was ${esc(o.meta.was)}</span>` : ""}<div class="small muted">${esc(known ? "bekend punt (gewogen)" : ref)}${capNo.has(ref) ? ' · <span style="color:var(--warn)">Captivate: nee</span>' : ""}${o.meta && o.meta.faces === 1 ? " · 1 kijkerstand" : ""}</div></td>
         <td class="num">${known ? "–" : esc(V.residText(r))}</td><td class="num" style="${r.rejected ? "color:var(--bad);font-weight:600" : ""}">${nl(r.w, 2)}${r.resid.length === 2 ? " <span class='small muted'>T/b</span>" : ""}</td><td class="num">${nl(r.redundancy, 2)}</td><td class="num">${esc(V.mdbText(r))}</td><td class="num">${isFinite(r.ext_rel) ? mm(r.ext_rel) : "–"}</td>
         <td class="act">${known ? `<button class="btn sm" data-act="ovr" data-n="${esc(o.frm)}" data-k="${o.kind === "XY" ? "xy" : "h"}" data-v="vrij">Vrijlaten</button>` : ref ? `<button class="btn sm" data-act="excl" data-ref="${esc(ref)}" title="Schakelt richting, afstand en hoogteverschil van deze meting uit">Uit</button>` : ""}</td></tr>`;
     };
-    const table = `<div class="card tight" style="flex:999 1 560px;min-width:0"><div class="row" style="padding:12px 16px"><h2 class="grow">Waarnemingen, gesorteerd op toetsgrootheid</h2><span class="small muted">${nObs} totaal</span></div>
+    const table = `<div class="card tight resv" style="flex:999 1 560px;min-width:0"><div class="row" style="padding:12px 16px"><h2 class="grow">Waarnemingen, gesorteerd op toetsgrootheid</h2><span class="small muted">${nObs} totaal</span></div>
       <div class="tablewrap"><table><thead><tr><th>Waarneming</th><th class="num">Verbetering</th><th class="num">Toets</th><th class="num">red.</th><th class="num">MDB</th><th class="num">ext. (mm)</th><th></th></tr></thead><tbody>${obs.map(orow).join("")}</tbody></table></div>
       ${nObs > 25 ? `<div style="padding:10px 16px"><button class="btn sm" data-act="allobs">${UI.showAllObs ? "Alleen de eerste 25 tonen" : `Alle ${nObs} waarnemingen tonen`}</button></div>` : ""}</div>`;
-    const mapFig = UI.dim === "2D" ? `<figure class="card" style="flex:1 1 420px;min-width:0;margin:0;padding:12px;align-self:flex-start;position:sticky;top:76px"><div class="row" style="padding-bottom:8px"><h2 class="grow">Netwerkkaart</h2>
+    const mapFig = UI.dim === "2D" ? `<figure class="card resv" style="flex:1 1 420px;min-width:0;margin:0;padding:12px;align-self:flex-start;position:sticky;top:76px"><div class="row" style="padding-bottom:8px"><h2 class="grow">Netwerkkaart</h2>
         <button class="iconbtn" data-act="view" data-v="kaart" aria-label="Kaart vergroten">${ICON.expand}</button><button class="iconbtn" data-act="map-window" aria-label="Kaart openen in nieuw venster">${ICON.ext}</button><button class="btn out" data-act="dxf">DXF</button></div>
         <div class="mapbox" id="map" style="height:440px"></div>${legend()}</figure>` : levelTable(res);
     const extra = res.extra && res.extra.scale ? `<div class="msg info small">Schaalfactor afstanden: <span class="mono">${res.extra.scale[0].toFixed(7)} ± ${res.extra.scale[1].toFixed(7)}</span> (${sg((res.extra.scale[0] - 1) * 1e6, 1)} ppm)</div>` : "";
@@ -499,10 +645,11 @@
   }
   function levelTable(res) {
     const rows = Object.keys(res.coords).filter((n) => curRes().net.points[n].code !== "HI").sort(natural).map((n) => `<tr><td class="mono">${esc(n)}</td><td class="num">${res.coords[n].toFixed(4).replace(".", ",")}</td><td class="num">${res.sd[n] ? mm(res.sd[n], 2) : "vast"}</td></tr>`).join("");
-    return `<div class="card tight" style="flex:1 1 320px;min-width:0"><div style="padding:12px 16px"><h2>Hoogtes</h2></div><div class="tablewrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Punt</th><th class="num">H (m)</th><th class="num">σH (mm)</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="card tight resv" style="flex:1 1 320px;min-width:0"><div style="padding:12px 16px"><h2>Hoogtes</h2></div><div class="tablewrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Punt</th><th class="num">H (m)</th><th class="num">σH (mm)</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
   function legend() {
-    return `<div class="legend" style="padding-top:6px"><span><svg width="12" height="12"><polygon points="6,1 11,11 1,11" fill="#B42318"/></svg> bekend / aansluiting</span><span><svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="#0B5FA5"/></svg> nieuw punt</span><span><svg width="12" height="12"><path d="M2 2L10 10M2 10L10 2" stroke="#15202B" stroke-width="2"/></svg> opstelling</span><span><svg width="14" height="12"><path d="M1 6H13" stroke="#1F7A3A" stroke-width="2" stroke-dasharray="3 2"/></svg> GNSS</span><span><svg width="14" height="12"><path d="M1 6H13" stroke="#E07B00" stroke-width="2.5"/></svg> verworpen</span><span><svg width="14" height="12"><ellipse cx="7" cy="6" rx="6" ry="3" fill="none" stroke="#5B3FB0"/></svg> ellips</span></div>`;
+    const P = mapPal();
+    return `<div class="legend" style="padding-top:6px"><span><svg width="12" height="12"><polygon points="6,1 11,11 1,11" fill="${P.known}"/></svg> bekend / aansluiting</span><span><svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="${P.nw}"/></svg> nieuw punt</span><span><svg width="12" height="12"><path d="M2 2L10 10M2 10L10 2" stroke="${P.st}" stroke-width="2"/></svg> opstelling</span><span><svg width="14" height="12"><path d="M1 6H13" stroke="${P.gnss}" stroke-width="2" stroke-dasharray="3 2"/></svg> GNSS</span><span><svg width="14" height="12"><path d="M1 6H13" stroke="${P.rej}" stroke-width="2.5"/></svg> verworpen</span><span><svg width="14" height="12"><ellipse cx="7" cy="6" rx="6" ry="3" fill="none" stroke="${P.ell}"/></svg> ellips</span></div>`;
   }
 
   // ------------------------------------------------------------- kaart (SVG, eigen pan/zoom)
@@ -533,43 +680,46 @@
     const steps = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
     return steps.reduce((a, b) => (Math.abs(Math.log(b / target)) < Math.abs(Math.log(a / target)) ? b : a));
   }
-  function mapSVG(model, view, W, H, layers, ellScale, sel) {
+  const PAL_LIGHT = { bg: "#FBFCFD", grid: "#E8ECF0", line: "#9AA5B1", rej: "#E07B00", known: "#B42318", nw: "#0B5FA5", st: "#15202B", odd: "#8A3A00", even: "#6B21A8", gnss: "#1F7A3A", ell: "#5B3FB0", txt: "#3E4A56", bar: "#15202B", barbg: "rgba(255,255,255,.85)", foot: "#8A949E" };
+  const PAL_DARK = { bg: "#211F1D", grid: "#34302C", line: "#6E655C", rej: "#FF9A3D", known: "#FF6B5E", nw: "#7FB8E8", st: "#F1ECE6", odd: "#E0A060", even: "#C59BF5", gnss: "#5CB880", ell: "#B9A2F0", txt: "#D6CEC5", bar: "#F1ECE6", barbg: "rgba(33,31,29,.85)", foot: "#A59B90" };
+  const mapPal = () => (curTheme() === "veldwerk-donker" ? PAL_DARK : PAL_LIGHT);
+  function mapSVG(model, view, W, H, layers, ellScale, sel, P = PAL_LIGHT) {
     const s = view.s, X = (x) => W / 2 + (x - view.cx) * s, Y = (y) => H / 2 - (y - view.cy) * s;
-    const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,Segoe UI,Roboto,Arial,sans-serif">`, `<rect width="${W}" height="${H}" fill="#FBFCFD"/>`];
+    const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,Segoe UI,Roboto,Arial,sans-serif">`, `<rect width="${W}" height="${H}" fill="${P.bg}"/>`];
     // schaalstok
     const target = 120 / s, pow = Math.pow(10, Math.floor(Math.log10(target)));
     const bar = [1, 2, 5, 10].map((k) => k * pow).reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a));
     if (layers.raster) {
       const step = bar;
       const x0 = Math.floor((view.cx - W / 2 / s) / step) * step, y0 = Math.floor((view.cy - H / 2 / s) / step) * step;
-      for (let x = x0; x <= view.cx + W / 2 / s; x += step) out.push(`<line x1="${X(x)}" y1="0" x2="${X(x)}" y2="${H}" stroke="#E8ECF0"/>`);
-      for (let y = y0; y <= view.cy + H / 2 / s; y += step) out.push(`<line x1="0" y1="${Y(y)}" x2="${W}" y2="${Y(y)}" stroke="#E8ECF0"/>`);
+      for (let x = x0; x <= view.cx + W / 2 / s; x += step) out.push(`<line x1="${X(x)}" y1="0" x2="${X(x)}" y2="${H}" stroke="${P.grid}"/>`);
+      for (let y = y0; y <= view.cy + H / 2 / s; y += step) out.push(`<line x1="0" y1="${Y(y)}" x2="${W}" y2="${Y(y)}" stroke="${P.grid}"/>`);
     }
     if (layers.waarnemingen || layers.verworpen) for (const L of model.lines) {
       if (L.rej ? !layers.verworpen : !layers.waarnemingen) continue;
       const a = model.C[L.a], b = model.C[L.b];
-      out.push(`<line x1="${X(a[0]).toFixed(1)}" y1="${Y(a[1]).toFixed(1)}" x2="${X(b[0]).toFixed(1)}" y2="${Y(b[1]).toFixed(1)}" stroke="${L.rej ? "#E07B00" : "#9AA5B1"}" stroke-width="${L.rej ? 2.5 : 1}"/>`);
+      out.push(`<line x1="${X(a[0]).toFixed(1)}" y1="${Y(a[1]).toFixed(1)}" x2="${X(b[0]).toFixed(1)}" y2="${Y(b[1]).toFixed(1)}" stroke="${L.rej ? P.rej : P.line}" stroke-width="${L.rej ? 2.5 : 1}"/>`);
     }
     if (layers.ellipsen) for (const p of model.pts) if (p.e) {
       const a = p.e[0] * ellScale * s, b = p.e[1] * ellScale * s, rot = p.e[2] * 0.9 - 90;
-      out.push(`<ellipse cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" rx="${Math.max(a, 0.5).toFixed(1)}" ry="${Math.max(b, 0.5).toFixed(1)}" transform="rotate(${rot.toFixed(2)} ${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)})" fill="none" stroke="#5B3FB0" stroke-width="1.2"/>`);
+      out.push(`<ellipse cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" rx="${Math.max(a, 0.5).toFixed(1)}" ry="${Math.max(b, 0.5).toFixed(1)}" transform="rotate(${rot.toFixed(2)} ${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)})" fill="none" stroke="${P.ell}" stroke-width="1.2"/>`);
     }
     for (const p of model.pts) {
       const x = X(p.x), y = Y(p.y);
       if (x < -50 || x > W + 50 || y < -50 || y > H + 50) continue;
       const known = p.p.status_xy && p.p.status_xy !== "vrij";
-      if (layers.gnss && model.gnss.has(p.n)) out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="none" stroke="${model.gnssRej.has(p.n) ? "#E07B00" : "#1F7A3A"}" stroke-width="1.6" stroke-dasharray="3 2"/>`);
+      if (layers.gnss && model.gnss.has(p.n)) out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="none" stroke="${model.gnssRej.has(p.n) ? P.rej : P.gnss}" stroke-width="1.6" stroke-dasharray="3 2"/>`);
       if (layers.punten) {
-        if (known) out.push(`<polygon points="${x},${y - 7} ${x + 6},${y + 4.5} ${x - 6},${y + 4.5}" fill="#B42318"/>`);
-        else if (p.p.code === "906") out.push(`<path d="M${x - 4.5} ${y - 4.5}L${x + 4.5} ${y + 4.5}M${x - 4.5} ${y + 4.5}L${x + 4.5} ${y - 4.5}" stroke="#15202B" stroke-width="2"/>`);
-        else if (p.p.code === "909") out.push(`<rect x="${x - 3.5}" y="${y - 3.5}" width="7" height="7" fill="${/[13579]$/.test(p.n) ? "#8A3A00" : "#6B21A8"}"/>`);
-        else out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="#0B5FA5"/>`);
-        if (sel === p.n) out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="12" fill="none" stroke="#0B5FA5" stroke-width="2.5"/>`);
+        if (known) out.push(`<polygon points="${x},${y - 7} ${x + 6},${y + 4.5} ${x - 6},${y + 4.5}" fill="${P.known}"/>`);
+        else if (p.p.code === "906") out.push(`<path d="M${x - 4.5} ${y - 4.5}L${x + 4.5} ${y + 4.5}M${x - 4.5} ${y + 4.5}L${x + 4.5} ${y - 4.5}" stroke="${P.st}" stroke-width="2"/>`);
+        else if (p.p.code === "909") out.push(`<rect x="${x - 3.5}" y="${y - 3.5}" width="7" height="7" fill="${/[13579]$/.test(p.n) ? P.odd : P.even}"/>`);
+        else out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${P.nw}"/>`);
+        if (sel === p.n) out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="12" fill="none" stroke="${P.nw}" stroke-width="2.5"/>`);
       }
-      if (layers.nummers) out.push(`<text x="${(x + 7).toFixed(1)}" y="${(y - 7).toFixed(1)}" font-size="11" fill="#3E4A56">${esc(p.n)}</text>`);
+      if (layers.nummers) out.push(`<text x="${(x + 7).toFixed(1)}" y="${(y - 7).toFixed(1)}" font-size="11" fill="${P.txt}">${esc(p.n)}</text>`);
     }
-    out.push(`<g transform="translate(14 ${H - 16})"><rect x="-6" y="-20" width="${bar * s + 50}" height="30" fill="rgba(255,255,255,.85)"/><line x1="0" y1="0" x2="${bar * s}" y2="0" stroke="#15202B" stroke-width="3"/><text x="${bar * s + 6}" y="4" font-size="12" fill="#15202B">${bar >= 1 ? bar : bar.toFixed(2)} m</text>${layers.ellipsen ? `<text x="0" y="-8" font-size="11" fill="#5B3FB0">ellipsen ×${ellScale}</text>` : ""}</g>`);
-    out.push(`<text x="${W - 10}" y="${H - 10}" text-anchor="end" font-size="11" fill="#8A949E">RD x/y · noord boven</text></svg>`);
+    out.push(`<g transform="translate(14 ${H - 16})"><rect x="-6" y="-20" width="${bar * s + 50}" height="30" fill="${P.barbg}"/><line x1="0" y1="0" x2="${bar * s}" y2="0" stroke="${P.bar}" stroke-width="3"/><text x="${bar * s + 6}" y="4" font-size="12" fill="${P.bar}">${bar >= 1 ? bar : bar.toFixed(2)} m</text>${layers.ellipsen ? `<text x="0" y="-8" font-size="11" fill="${P.ell}">ellipsen ×${ellScale}</text>` : ""}</g>`);
+    out.push(`<text x="${W - 10}" y="${H - 10}" text-anchor="end" font-size="11" fill="${P.foot}">RD x/y · noord boven</text></svg>`);
     return out.join("");
   }
   function attachMap(el, R, opts = {}) {
@@ -585,9 +735,9 @@
     let view = el._view || fit(), sel = el._sel || null;
     const draw = () => {
       el._view = view;
-      el.innerHTML = mapSVG(model, view, W0(), H0(), UI.mapLayers, ell, sel) +
+      el.innerHTML = mapSVG(model, view, W0(), H0(), UI.mapLayers, ell, sel, mapPal()) +
         `<div class="maptools"><button data-z="1.5" aria-label="Inzoomen">+</button><button data-z="0.667" aria-label="Uitzoomen">−</button><button data-z="fit" aria-label="Passend maken" style="font-size:13px">▢</button></div>` +
-        (sel ? infoBox(R, sel) : `<div class="small muted" style="position:absolute;left:8px;top:6px;background:rgba(255,255,255,.85);padding:2px 6px;border-radius:4px">Tik op een punt voor details · slepen = verschuiven</div>`);
+        (sel ? infoBox(R, sel) : `<div class="small muted maphint">Tik op een punt voor details · slepen = verschuiven</div>`);
     };
     draw();
     el.onclick = (ev) => {
@@ -669,7 +819,7 @@
   }
   function viewExport() {
     const R = curRes();
-    if (!R || R.error) return `<h1>Export</h1><div class="msg warn">Nog geen resultaat om te exporteren.</div>`;
+    if (!R || R.error) return `<h1>Export</h1>${noRes(R)}`;
     const o = expOpts();
     const { rows, present, inc, results } = exportData();
     const chips = Object.entries(present).sort((a, b) => natural(a[0], b[0])).map(([c, n]) => `<label class="${inc.includes(c) ? "on" : ""}"><input type="checkbox" data-expcode="${esc(c)}" ${inc.includes(c) ? "checked" : ""}> ${c ? esc(c) + " " + esc(codeDesc(c)) : "zonder code"} (${n})</label>`).join("");
@@ -685,18 +835,17 @@
         <label class="check"><input type="checkbox" data-exp="withSd" ${o.withSd ? "checked" : ""}> Standaardafwijkingen meenemen</label></div>
         <div class="row" style="margin-top:8px"><span>Resultaat van</span><div class="seg"><button class="${o.scope !== "alle" ? "on" : ""}" data-act="expscope" data-v="stap">Stap ${UI.stage + 1} · ${esc(curStage().name)}</button><button class="${o.scope === "alle" ? "on" : ""}" data-act="expscope" data-v="alle">Alle stappen samen</button></div></div>
         <p class="help">Bij “alle stappen samen” krijgt elk punt de laatst berekende waarde: bijvoorbeeld x, y uit de GNSS-stap en H uit de waterpassing.</p></section>
-      <section class="card tight"><div class="row" style="padding:12px 16px"><h2 class="grow">Voorbeeld</h2><span class="small muted">${rows.length} punten · RD / NAP · ; en decimale komma</span></div>
+      <section class="card tight resv"><div class="row" style="padding:12px 16px"><h2 class="grow">Voorbeeld</h2><span class="small muted">${rows.length} punten · RD / NAP</span></div>
         <div class="tablewrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Punt</th><th>Code</th><th class="num">x</th><th class="num">y</th><th class="num">H</th>${o.withSd ? '<th class="num">σx / σy / σH (mm)</th>' : ""}<th>Controle</th></tr></thead><tbody>
         ${rows.slice(0, 300).map((r) => `<tr><td class="mono">${esc(r.punt)}</td><td>${esc(r.code)}</td><td class="num">${nl(r.x, 4)}</td><td class="num">${nl(r.y, 4)}</td><td class="num">${nl(r.H, 4)}</td>${o.withSd ? `<td class="num">${mm(r.sx)} / ${mm(r.sy)} / ${mm(r.sH)}</td>` : ""}<td style="${r.controle === "nee" ? "color:var(--warn);font-weight:600" : ""}">${esc(r.controle)}</td></tr>`).join("")}</tbody></table></div></section>
       <div class="msg info small">${status}.${nexcl ? ` Uitgeschakeld: ${nexcl} meting(en).` : ""}${unc.length ? ` ${unc.join(", ")} ${unc.length > 1 ? "staan" : "staat"} in de lijst met controle = nee.` : ""} Alles staat in het rapport.</div>
-      <div class="row"><button class="btn pri" data-act="exp-csv">Coördinaten (.csv)</button><button class="btn" data-act="exp-xlsx">Excel met rapport (.xlsx)</button><button class="btn" data-act="exp-report">Rapport (afdrukken / PDF)</button><button class="btn" data-act="exp-txt">Rapport (.txt)</button><button class="btn" data-act="dxf">Netwerk (.dxf)</button></div>`;
+      <div class="row"><button class="btn pri" data-act="exp-csv">Coördinaten exporteren (.csv / .txt)…</button><button class="btn" data-act="exp-xlsx">Excel met rapport (.xlsx)</button><button class="btn" data-act="exp-report">Rapport (afdrukken / PDF)</button><button class="btn" data-act="exp-txt">Rapport (.txt)</button><button class="btn" data-act="dxf">Netwerk (.dxf)</button></div>`;
   }
   function doExport(kind) {
     const o = expOpts();
     const { rows, results } = exportData();
     const base = `${safeName(S.name)}_${o.scope === "alle" ? "alle_stappen" : safeName(curStage().name)}`;
-    if (kind === "csv") return download(`${base}.csv`, V.toCSV(rows, o.withSd), "text/csv;charset=utf-8");
-    const rep = V.fullReport(PROJ, o.scope === "alle" ? allResults() : results, { name: S.name, version: VERSION });
+    const rep = V.fullReport(PROJ, o.scope === "alle" ? allResults() : results, { name: S.name, version: VERSION, corrections: S.corrections });
     if (kind === "txt") return download(`${base}_rapport.txt`, rep);
     if (kind === "xlsx") {
       const cols = V.COLS.filter((c) => o.withSd || !c.endsWith("_mm"));
@@ -711,11 +860,148 @@
     }
   }
 
+  // ------------------------------------------------------------- CSV/TXT-export (dialoog)
+  const PRESETS = {
+    excel: { label: "Excel (NL)", cfg: { cols: ["punt", "code", "x", "y", "H", "sx", "sy", "sH", "controle"], sep: ";", dec: ",", digits: 4, header: true, bom: true, crlf: true, ext: "csv" } },
+    captivate: { label: "Captivate-import", cfg: { cols: ["punt", "x", "y", "H", "code"], sep: ",", dec: ".", digits: 3, header: false, bom: false, crlf: true, ext: "csv" }, note: "Punt, Oost, Noord, Hoogte, Code met komma en decimale punt. Nog niet gecontroleerd met een exportbestand uit jouw Captivate: kijk de indeling na in het importformaat op het veldboek." },
+    lijst: { label: "Coördinatenlijst (punt, x, y, H)", cfg: { cols: ["punt", "x", "y", "H"], sep: "\t", dec: ".", digits: 4, header: true, bom: false, crlf: true, ext: "txt" } },
+  };
+  const SEPS = [[";", ";"], [",", ","], ["\t", "tab"], [" ", "spatie"]];
+  function userPresets() { try { return JSON.parse(localStorage.getItem(PRESET_KEY) || "{}") || {}; } catch (e) { return {}; } }
+  function saveUserPresets(p) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(p)); } catch (e) { toast("Voorinstelling kon niet op dit apparaat worden bewaard"); } }
+  const allColKeys = () => Object.keys(V.DELIM_COLS);
+  function openExport() {
+    const base = S.csv && S.csv.cols ? S.csv : PRESETS.excel.cfg;
+    const cfg = JSON.parse(JSON.stringify(base));
+    UI.modal = { kind: "export", cfg, preset: (S.csv && S.csv.preset) || "excel", order: [...cfg.cols, ...allColKeys().filter((k) => !cfg.cols.includes(k))] };
+    render();
+  }
+  function exportModal(m) {
+    const c = m.cfg, up = userPresets();
+    const { rows } = exportData();
+    const conflict = c.sep === "," && c.dec === ",";
+    const txt = V.toDelimited(rows.slice(0, 6), { ...c, bom: false }, codeDesc);
+    const fname = `${safeName(S.name)}_${expOpts().scope === "alle" ? "alle_stappen" : safeName(curStage().name)}.${c.ext}`;
+    const pre = m.preset && PRESETS[m.preset];
+    const presetBtns = [...Object.entries(PRESETS).map(([k, p]) => [k, p.label]), ...Object.keys(up).map((k) => ["u:" + k, "Eigen: " + k])]
+      .map(([k, l]) => `<button class="${m.preset === k ? "on" : ""}" data-act="exp-preset" data-v="${esc(k)}">${esc(l)}</button>`).join("");
+    const colRows = m.order.map((k, i) => { const on = c.cols.includes(k); return `<div class="c ${on ? "" : "off"}"><input type="checkbox" data-expcol="${k}" ${on ? "checked" : ""} id="ec_${k}"><label for="ec_${k}" class="grow">${esc(V.DELIM_COLS[k].label)}</label><span class="mv"><button data-act="exp-mv" data-k="${k}" data-d="-1" ${i === 0 ? "disabled" : ""} aria-label="${esc(V.DELIM_COLS[k].label)} omhoog">↑</button><button data-act="exp-mv" data-k="${k}" data-d="1" ${i === m.order.length - 1 ? "disabled" : ""} aria-label="${esc(V.DELIM_COLS[k].label)} omlaag">↓</button></span></div>`; }).join("");
+    const segs = (key, opts, dis) => `<div class="seg">${opts.map(([v, l]) => `<button class="${c[key] === v ? "on" : ""}" data-act="exp-set" data-k="${key}" data-v="${esc(v)}" ${dis && dis(v) ? "disabled" : ""}>${esc(l)}</button>`).join("")}</div>`;
+    return `<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mt"><div class="mh"><div><div class="kick">Export · ${rows.length} punten</div><h2 id="mt">Coördinaten exporteren</h2></div><button class="x" data-act="modal-close" aria-label="Sluiten">×</button></div>
+      <div class="mb"><div><div class="small muted" style="margin-bottom:6px">Voorinstelling</div><div class="presets">${presetBtns}</div>${pre && pre.note ? `<div class="help" style="margin-top:6px">${esc(pre.note)}</div>` : ""}</div>
+      <div class="grid-exp"><div><h3>Kolommen en volgorde</h3><div class="help" style="margin:2px 0 8px">Vink aan wat erin moet; zet de volgorde met de pijltjes.</div><div class="cols">${colRows}</div></div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><div class="small muted" style="margin-bottom:4px">Scheidingsteken</div>${segs("sep", SEPS, (v) => v === "," && c.dec === ",")}</div>
+        <div><div class="small muted" style="margin-bottom:4px">Decimaal</div>${segs("dec", [[",", "komma"], [".", "punt"]], (v) => v === "," && c.sep === ",")}${conflict ? '<div class="warnline">Komma kan niet samen met komma als scheidingsteken.</div>' : '<div class="help">Komma kan niet samen met komma als scheidingsteken.</div>'}</div>
+        <div class="row" style="gap:18px"><div><div class="small muted" style="margin-bottom:4px">Decimalen coördinaten</div>${segs("digits", [[3, "3 (mm)"], [4, "4"]])}</div><div><div class="small muted" style="margin-bottom:4px">Extensie</div>${segs("ext", [["csv", ".csv"], ["txt", ".txt"]])}</div></div>
+        <label class="check"><input type="checkbox" data-expopt="header" ${c.header ? "checked" : ""}> Kopregel met kolomnamen</label>
+        <label class="check"><input type="checkbox" data-expopt="bom" ${c.bom ? "checked" : ""}> BOM (zodat Excel tekens als σ en ë goed leest)</label>
+        <label class="check"><input type="checkbox" data-expopt="crlf" ${c.crlf ? "checked" : ""}> Regeleinde Windows (CR LF)</label>
+        <div class="small muted">Welke punten erin komen, stel je in op het exportscherm (codes en filters): nu ${rows.length} punten.</div></div></div>
+      <div><div class="small muted" style="margin-bottom:4px">Voorbeeld · eerste regels van ${esc(fname)}</div><pre class="preview">${esc(txt.replace(/\t/g, "→   ")) || "(geen punten)"}</pre></div></div>
+      <div class="mf"><button class="btn" data-act="exp-preset-save" style="margin-right:auto">Als voorinstelling bewaren…</button>${m.preset && m.preset.startsWith("u:") ? `<button class="btn danger" data-act="exp-preset-del">Voorinstelling verwijderen</button>` : ""}<button class="btn" data-act="modal-close">Annuleren</button><button class="btn pri" data-act="exp-do" ${conflict || !c.cols.length || !rows.length ? "disabled" : ""}>Exporteren</button></div></div>`;
+  }
+  function doCsvExport() {
+    const m = UI.modal, c = m.cfg;
+    const { rows } = exportData();
+    const name = `${safeName(S.name)}_${expOpts().scope === "alle" ? "alle_stappen" : safeName(curStage().name)}.${c.ext}`;
+    download(name, V.toDelimited(rows, c, codeDesc), c.ext === "csv" ? "text/csv;charset=utf-8" : "text/plain;charset=utf-8");
+    S.csv = { ...c, preset: m.preset };
+    UI.modal = null;
+    changed({ norecalc: true });
+    toast(`${rows.length} punten geëxporteerd naar ${name}`);
+  }
+
+  // ------------------------------------------------------------- dialogen
+  function modalHTML() {
+    const m = UI.modal;
+    if (!m) return "";
+    let inner = "";
+    if (m.kind === "export") inner = exportModal(m);
+    else if (m.kind === "name") inner = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mt"><div class="mh"><div><div class="kick">${m.edit ? "Project" : m.first ? "Bij het eerste inladen" : "Nieuw project"}</div><h2 id="mt">Hoe heet dit project?</h2></div></div>
+      <div class="mb"><label class="field">Projectnaam<input data-m="name" value="${esc(m.name)}" autocomplete="off"></label>
+      <div class="help">${m.from ? `Voorgesteld uit de bestandsnaam <span class="mono">${esc(m.from)}</span>. ` : ""}De naam wordt gebruikt voor het projectbestand en de exports. Later aan te passen door op de naam bovenin te tikken.</div></div>
+      <div class="mf"><button class="btn" data-act="modal-close">${m.edit ? "Annuleren" : "Later"}</button><button class="btn pri" data-act="name-ok">${m.edit ? "Opslaan" : "Verder"}</button></div></div>`;
+    else if (m.kind === "rename") {
+      const exists = m.to && m.to !== m.from && pointExists(m.to);
+      inner = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mt"><div class="mh"><div><div class="kick">Hele project</div><h2 id="mt">Puntnummer wijzigen</h2></div><button class="x" data-act="modal-close" aria-label="Sluiten">×</button></div>
+      <div class="mb"><div>Punt <b class="mono">${esc(m.from)}</b> komt voor in ${m.count} waarneming${m.count === 1 ? "" : "en"}${m.stages ? ` (${esc(m.stages)})` : ""}.</div>
+      <label class="field">Nieuw puntnummer<input data-m="to" value="${esc(m.to)}" class="mono" autocomplete="off"></label>
+      <div class="msg warn small" id="mergewarn" ${exists ? "" : "hidden"}>Dit puntnummer bestaat al. De twee punten worden samengevoegd tot één punt.</div>
+      <div class="help">Alle waarnemingen in alle stappen krijgen het nieuwe nummer; de ingelezen bestanden blijven ongewijzigd. Regels en handmatige status voor dit punt gaan mee. Ongedaan maken kan onder <b>Correcties</b>.</div></div>
+      <div class="mf"><button class="btn" data-act="modal-close">Annuleren</button><button class="btn pri" data-act="rename-ok" id="renok">${exists ? "Samenvoegen" : "Wijzigen"}</button></div></div>`;
+    } else if (m.kind === "saveas") {
+      const fs = !!window.showSaveFilePicker;
+      inner = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mt"><div class="mh"><div><div class="kick">Project bewaren</div><h2 id="mt">Opslaan als</h2></div><button class="x" data-act="modal-close" aria-label="Sluiten">×</button></div>
+      <div class="mb"><label class="field">Projectnaam<input data-m="name" value="${esc(m.name)}" autocomplete="off"></label>
+      <label class="field">Bestandsnaam<input data-m="file" value="${esc(m.file)}" class="mono" autocomplete="off"></label>
+      <div class="help">${fs ? "Na <b>Opslaan</b> kies je de map in het gewone venster van je computer. Daarna schrijft <b>Opslaan</b> steeds naar dit bestand." : "Deze browser kan geen map kiezen: het bestand komt in de map Downloads met deze naam."}</div></div>
+      <div class="mf"><button class="btn" data-act="modal-close">Annuleren</button><button class="btn pri" data-act="saveas-ok">Opslaan</button></div></div>`;
+    }
+    return `<div class="modalbg" data-act="modal-bg">${inner}</div>`;
+  }
+  const projFileName = (n) => `${safeName(n || S.name)}.vereffening.json`;
+  function suggestName(names) {
+    for (const n of names) { const m = /([A-Za-z]{1,4}[-_ ]?\d{4,6})/.exec(n) || /(\d{5,6})/.exec(n); if (m) return { name: m[1].replace(/[-_ ]/g, "").toUpperCase(), from: n }; }
+    return { name: "", from: "" };
+  }
+  async function writeHandle(h) {
+    const w = await h.createWritable();
+    await w.write(new Blob([JSON.stringify(S)], { type: "application/json" }));
+    await w.close();
+  }
+  async function saveFile() {
+    if (UI.fh) {
+      try { await writeHandle(UI.fh); UI.unsaved = false; render(); toast(`Opgeslagen in ${UI.fh.name}`); return; }
+      catch (e) { console.warn(e); toast("Opslaan in het bestand lukte niet; kies opnieuw een locatie"); }
+    }
+    UI.modal = { kind: "saveas", name: S.name === "Nieuw project" ? "" : S.name, file: projFileName() };
+    render();
+  }
+  async function saveAsOk() {
+    const m = UI.modal;
+    const nm = (m.name || "").trim();
+    if (nm) S.name = nm;
+    let file = (m.file || "").trim() || projFileName();
+    if (!/\.json$/i.test(file)) file += ".vereffening.json";
+    save();
+    if (window.showSaveFilePicker) {
+      try {
+        const h = await window.showSaveFilePicker({ suggestedName: file, types: [{ description: "Vereffeningsproject", accept: { "application/json": [".json"] } }] });
+        await writeHandle(h);
+        UI.fh = h; UI.modal = null; UI.unsaved = false; render(); toast(`Opgeslagen als ${h.name}`); return;
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        console.warn(e);
+      }
+    }
+    download(file, JSON.stringify(S), "application/json");
+    UI.modal = null; UI.unsaved = false; render(); toast(`${file} staat in Downloads`);
+  }
+  function openProject(text, handle) {
+    try {
+      S = migrate(JSON.parse(text));
+      UI.fh = handle || null; UI.stage = 0; UI.view = "stappen"; UI.unsaved = false; UI.psel.clear(); RES = [];
+      save(); render(); recalc(`Project ${S.name} geopend`);
+    } catch (e) { toast("Dit is geen geldig projectbestand"); }
+  }
+  async function openFile() {
+    if (window.showOpenFilePicker) {
+      try {
+        const [h] = await window.showOpenFilePicker({ types: [{ description: "Vereffeningsproject", accept: { "application/json": [".json"] } }] });
+        const f = await h.getFile();
+        openProject(decode(await f.arrayBuffer()), h);
+        return;
+      } catch (e) { if (e && e.name === "AbortError") return; console.warn(e); }
+    }
+    pickFiles(".json", false, async (f) => { if (f[0]) openProject(decode(await f[0].arrayBuffer()), null); });
+  }
+
   // ------------------------------------------------------------- Controles
   function viewControles() {
     if (!S.stages.length) return `<h1>Controles bij het inlezen</h1><div class="msg info">Nog geen stappen.</div>`;
     const secs = S.stages.map((st, i) => {
-      const R = RES[i];
+      const R = resOf(st);
       if (!R) return "";
       if (R.error) return `<section class="card"><span class="badge">STAP ${i + 1}</span> <h2 style="display:inline">${esc(st.name)}</h2><div class="msg bad" style="margin-top:8px">${esc(R.error)}</div></section>`;
       const c = R.checks, parts = [];
@@ -753,7 +1039,7 @@
       parts.push(`<details><summary class="small">Rekenlog van deze stap</summary><pre class="log">${esc(R.log.join("\n"))}</pre></details>`);
       return `<section class="card" style="display:flex;flex-direction:column;gap:10px"><div class="row"><span class="badge">STAP ${i + 1}</span><h2 class="grow">${esc(st.name)}</h2><button class="btn sm" data-act="openstage" data-i="${i}">Openen</button></div>${parts.join("")}</section>`;
     }).join("");
-    return `<div><h1>Controles bij het inlezen</h1><div class="muted">Wat de app vóór en tijdens de vereffening opmerkt. Elke melding kun je accepteren, aanpassen of terugdraaien.</div></div>${secs}`;
+    return `<div><h1>Controles bij het inlezen</h1><div class="muted">Wat de app vóór en tijdens de vereffening opmerkt. Elke melding kun je accepteren, aanpassen of terugdraaien.</div></div>${corrCard(true)}<div class="resv" style="display:flex;flex-direction:column;gap:16px">${secs}</div>`;
   }
 
   // ------------------------------------------------------------- Instellingen
@@ -800,7 +1086,8 @@
         <p><b>Correctiegrids:</b> het correctiegrid rdcorr2018 en de quasi-geoïde nlgeo2018 zijn afkomstig van de Nederlandse Samenwerking Geodetische Infrastructuur (NSGI) en worden gebruikt onder een Creative Commons-licentie (<a href="https://creativecommons.org/licenses/by-nd/4.0/deed.nl" target="_blank" rel="noopener">CC BY-ND 4.0</a>, zoals vermeld bij de download). De waarden zijn ongewijzigd; alleen het bestandsformaat is omgezet naar een compacte vorm. NSGI is niet verantwoordelijk voor deze app.</p>
         <p><b>Trimble .job:</b> dit formaat is niet gepubliceerd; de lezer is afgeleid uit voorbeeldbestanden en is experimenteel. Gebruik bij voorkeur een officiële export (JobXML) of controleer de uitkomst.</p>
         <p><b>Merken:</b> Leica, Captivate, HeXML en GSI zijn merken van Leica Geosystems; Trimble, DiNi en Trimble Access van Trimble; MOVE3 van Sweco. Ze worden alleen genoemd om aan te geven welke bestanden de app leest. Deze app is niet verbonden aan of goedgekeurd door deze partijen.</p>
-        <p><b>Privacy:</b> alles wordt in deze browser berekend en bewaard; er gaat niets over internet.</p></section>
+        <p><b>Lettertypes:</b> Inter (The Inter Project Authors) en Nunito (The Nunito Project Authors), beide onder de SIL Open Font License 1.1, zitten in het bestand zelf zodat de app ook offline zo oogt.</p>
+        <p><b>Privacy:</b> alles wordt in deze browser berekend en bewaard; er gaat niets over internet. De gekozen weergave en eigen exportvoorinstellingen worden alleen op dit apparaat onthouden.</p></section>
       <section class="card"><h2>Codelijst</h2><div class="row" style="margin-top:8px"><span class="grow">${S.codes && S.codes.name ? `${esc(S.codes.name)} · ${Object.keys(S.codes.codes).length} codes` : "Geen codelijst"} · rollen: 900/515 NAP → voorstel 1D vast · 906 opstelplaats → niet exporteren · 907/909/910/911 → exporteren</span><button class="btn" data-act="load-codelist">Andere codelijst laden (.xml)</button></div></section>
       <section class="card small muted">Versie ${VERSION} · laatste berekening ${nl(UI.lastMs || 0, 0)} ms · alle berekeningen gebeuren in deze browser, zonder internet.</section>`;
   }
@@ -821,13 +1108,20 @@
     st3.known = [{ points: "80*", dim: "2D", mode: "gewogen", origin: "GNSS spijkers" }, { points: "80*", dim: "1D", mode: "vast", origin: "Waterpassing" }];
     st3.snooping = 5;
     S.stages = [st1, st2, st3];
-    UI.view = "stappen"; UI.stage = 0;
-    changed();
-    toast("Voorbeeldproject geladen: gesimuleerde metingen met expres geplante fouten");
+    S.nameAsked = true;
+    UI.view = "stappen"; UI.stage = 0; UI.fh = null; UI.unsaved = false; RES = [];
+    save(); render();
+    recalc("Voorbeeldproject geladen: gesimuleerde metingen met expres geplante fouten");
   }
 
   // ------------------------------------------------------------- events
   function afterRender() {
+    const hd = document.querySelector("header.top");
+    if (hd) document.documentElement.style.setProperty("--toph", hd.offsetHeight + "px");
+    const tp = document.getElementById("themepop"), lg = document.querySelector(".logo");
+    if (tp && lg) { const r = lg.getBoundingClientRect(); tp.style.top = `${r.bottom + 6}px`; tp.style.left = `${Math.max(8, r.left)}px`; }
+    const fi = document.querySelector(".modal [data-m]");
+    if (fi) { fi.focus(); fi.select && fi.select(); }
     const m = document.getElementById("map");
     if (m && curRes()) attachMap(m, curRes());
     document.querySelectorAll("[data-drop]").forEach((el) => {
@@ -839,19 +1133,46 @@
   const num = (v) => { const x = Number(String(v).replace(",", ".").replace("−", "-").trim()); return Number.isFinite(x) ? x : null; };
   function onClick(ev) {
     const b = ev.target.closest("[data-act]");
+    if (UI.themeOpen && !ev.target.closest("#themepop,.logo") && (!b || b.dataset.act !== "theme")) { UI.themeOpen = false; if (!b) { render(); return; } }
     if (!b || b.tagName === "SELECT" || b.tagName === "INPUT") return;
     const a = b.dataset.act, d = b.dataset;
     const st = curStage();
+    if (a === "modal-bg" && ev.target !== b) return;
+    if (UI.themeOpen && a !== "theme-menu" && a !== "theme") UI.themeOpen = false;
+    UI._why = whyClick(a, d, st);
     switch (a) {
+      case "theme-menu": UI.themeOpen = !UI.themeOpen; render(); break;
+      case "theme": applyTheme(d.v); UI.themeOpen = false; render(); break;
+      case "pending-clear": UI.pending = []; render(); break;
+      case "modal-close": case "modal-bg": UI.modal = null; render(); break;
+      case "name-ok": { const nm = (UI.modal.name || "").trim(); if (nm) S.name = nm; UI.modal = null; changed({ norecalc: true }); break; }
+      case "save-as": UI.modal = { kind: "saveas", name: S.name === "Nieuw project" ? "" : S.name, file: UI.fh ? UI.fh.name : projFileName() }; render(); break;
+      case "saveas-ok": saveAsOk(); break;
+      case "ren-point": {
+        let cnt = 0; const stn = [];
+        S.stages.forEach((s0, k) => { const r = resOf(s0); if (!r || !r.net) return; const c = r.net.obs.filter((o) => o.frm === d.n || o.to === d.n).length; if (c) { cnt += c; stn.push(`stap ${k + 1}`); } });
+        UI.modal = { kind: "rename", from: d.n, to: d.n, count: cnt, stages: stn.join(", ") }; render(); break;
+      }
+      case "rename-ok": { const m = UI.modal; const to = String(m.to || "").trim(); if (!to || to === m.from) { UI.modal = null; render(); break; } UI.modal = null; renamePoint(m.from, to); break; }
+      case "psel-clear": UI.psel.clear(); UI.selCode = ""; render(); break;
+      case "code-apply": if (UI.selCode && UI.psel.size) { const names = [...UI.psel]; setCodes(names, UI.selCode === "__geen" ? "" : UI.selCode); UI.psel.clear(); UI.selCode = ""; } break;
+      case "corr-undo": undoCorr(d.id); break;
+      case "corr-clear": if (confirm("Alle correcties (codes en puntnummers) ongedaan maken?")) { for (const c of [...S.corrections].reverse()) if (c.type === "naam") renameRefs(c.to, c.from); S.corrections = []; changed({ why: "alle correcties ongedaan" }); } break;
+      case "exp-preset": { const m = UI.modal; const k = d.v; const cfg = k.startsWith("u:") ? userPresets()[k.slice(2)] : PRESETS[k].cfg; if (!cfg) break; m.cfg = JSON.parse(JSON.stringify(cfg)); m.preset = k; m.order = [...m.cfg.cols, ...allColKeys().filter((x) => !m.cfg.cols.includes(x))]; render(); break; }
+      case "exp-set": { const m = UI.modal; m.cfg[d.k] = d.k === "digits" ? +d.v : d.v; m.preset = ""; render(); break; }
+      case "exp-mv": { const m = UI.modal; const i = m.order.indexOf(d.k), j = i + +d.d; if (j < 0 || j >= m.order.length) break; [m.order[i], m.order[j]] = [m.order[j], m.order[i]]; m.cfg.cols = m.order.filter((k) => m.cfg.cols.includes(k)); m.preset = ""; render(); break; }
+      case "exp-preset-save": { const nm = prompt("Naam van de voorinstelling", "Uitzetlijst"); if (!nm) break; const up = userPresets(); up[nm] = JSON.parse(JSON.stringify(UI.modal.cfg)); saveUserPresets(up); UI.modal.preset = "u:" + nm; render(); toast(`Voorinstelling ${nm} bewaard op dit apparaat`); break; }
+      case "exp-preset-del": { const up = userPresets(); delete up[UI.modal.preset.slice(2)]; saveUserPresets(up); UI.modal.preset = ""; render(); break; }
+      case "exp-do": doCsvExport(); break;
       case "view": UI.view = d.v; if (d.v === "stappen" && UI.stage >= S.stages.length) UI.stage = 0; render(); window.scrollTo(0, 0); break;
       case "tab": UI.view = "stap"; UI.tab = d.v; render(); window.scrollTo(0, 0); break;
       case "selstage": if (ev.target.closest("button")) return; UI.stage = +d.i; render(); break;
-      case "openstage": UI.stage = +d.i; UI.view = "stap"; UI.tab = RES[+d.i] && !RES[+d.i].error ? "vereffening" : "bestanden"; render(); window.scrollTo(0, 0); break;
+      case "openstage": UI.stage = +d.i; UI.view = "stap"; UI.tab = resOf(S.stages[+d.i]) && !resOf(S.stages[+d.i]).error ? "vereffening" : "bestanden"; render(); window.scrollTo(0, 0); break;
       case "add-stage": { const nm = prompt("Naam van de nieuwe stap", `Stap ${S.stages.length + 1}`); if (nm === null) return; S.stages.push(V.newStage(nm || `Stap ${S.stages.length + 1}`)); UI.stage = S.stages.length - 1; UI.view = "stap"; UI.tab = "bestanden"; changed(); break; }
       case "rename-stage": { const s = S.stages[+d.i], old = s.name, nm = prompt("Nieuwe naam", old); if (!nm || nm === old) return; for (const t of S.stages) for (const r of t.known) if (r.origin === old) r.origin = nm; s.name = nm; changed(); break; }
       case "move-stage": { const i = +d.i, j = i + +d.d; [S.stages[i], S.stages[j]] = [S.stages[j], S.stages[i]]; UI.stage = j; changed(); break; }
       case "del-stage": if (confirm(`Stap "${S.stages[+d.i].name}" verwijderen met alle bestanden en regels?`)) { S.stages.splice(+d.i, 1); UI.stage = Math.max(0, Math.min(UI.stage, S.stages.length - 1)); changed(); } break;
-      case "recalc": changed(); toast("Opnieuw gerekend"); break;
+      case "recalc": recalc(); break;
       case "pick-files": pickFiles(".xml,.gsi,.GSI,.csv,.txt,.tco,.obs,.prj,.dat,.DAT,.dc,.DC,.job,.JOB", true, (f) => addFiles(f, UI.view === "stap" ? UI.stage : undefined)); break;
       case "demo": demo(); break;
       case "src-toggle": st.sources[+d.i].disabled = !st.sources[+d.i].disabled; changed(); break;
@@ -878,7 +1199,7 @@
       case "map-window": mapWindow(); break;
       case "dxf": doDXF(); break;
       case "expscope": expOpts().scope = d.v; changed({ norecalc: true }); break;
-      case "exp-csv": doExport("csv"); break;
+      case "exp-csv": openExport(); break;
       case "exp-xlsx": doExport("xlsx"); break;
       case "exp-report": doExport("report"); break;
       case "exp-txt": doExport("txt"); break;
@@ -886,14 +1207,49 @@
       case "set-defaults": if (confirm("Alle projectinstellingen terugzetten naar de standaardwaarden?")) { S.settings = V.defaultSettings(); changed(); } break;
       case "set-reset-stage": S.stages[+UI.settingsTarget].settings = null; changed(); break;
       case "load-codelist": pickFiles(".xml", false, async (f) => { if (f[0]) loadCodelist(decode(await f[0].arrayBuffer()), f[0].name); }); break;
-      case "rename-project": { const nm = prompt("Projectnaam", S.name); if (nm) { S.name = nm; changed({ norecalc: true }); } break; }
-      case "save-file": download(`${safeName(S.name)}.vereffening.json`, JSON.stringify(S), "application/json"); break;
-      case "open-file": pickFiles(".json", false, async (f) => { try { S = migrate(JSON.parse(decode(await f[0].arrayBuffer()))); UI.stage = 0; UI.view = "stappen"; changed(); toast("Project geopend"); } catch (e) { toast("Dit is geen geldig projectbestand"); } }); break;
-      case "new-project": if (confirm("Nieuw project beginnen? Het huidige project wordt uit de browser verwijderd (sla het eerst op als je het wilt bewaren).")) { S = defaultProject(); UI.stage = 0; UI.view = "stappen"; changed(); } break;
+      case "rename-project": UI.modal = { kind: "name", edit: true, name: S.name === "Nieuw project" ? "" : S.name, from: "" }; render(); break;
+      case "save-file": saveFile(); break;
+      case "open-file": openFile(); break;
+      case "new-project": if (!S.stages.length || confirm(`Nieuw project beginnen? Het huidige project wordt uit de browser verwijderd${UI.unsaved ? " en heeft wijzigingen die nog niet zijn opgeslagen" : ""}.`)) { S = defaultProject(); S.nameAsked = true; RES = []; UI.fh = null; UI.pending = []; UI.unsaved = false; UI.psel.clear(); UI.stage = 0; UI.view = "stappen"; UI.modal = { kind: "name", first: false, name: "", from: "" }; save(); render(); } break;
     }
+    UI._why = null;
+  }
+  function whyClick(a, d, st) {
+    const S0 = (i) => S.stages[+i] || {};
+    switch (a) {
+      case "add-stage": return "stap toegevoegd";
+      case "rename-stage": return `naam stap ${+d.i + 1}`;
+      case "move-stage": return "volgorde stappen";
+      case "del-stage": return `stap ${S0(d.i).name} verwijderd`;
+      case "src-toggle": return st && st.sources[+d.i] ? `${st.sources[+d.i].name} ${st.sources[+d.i].disabled ? "aan" : "uit"}` : "bestand";
+      case "src-del": return st && st.sources[+d.i] ? `${st.sources[+d.i].name} verwijderd` : "bestand verwijderd";
+      case "rule-add": case "rule-del": case "rule-toggle": case "rule-set": case "nap-rule": return `regels bekende punten stap ${UI.stage + 1}`;
+      case "ovr": return `${d.n} ${d.k === "xy" ? "ligging" : "hoogte"} ${d.v}`;
+      case "ovr-reset": return `${d.n} terug naar regels`;
+      case "excl": case "excl-st": return `${d.ref} aan/uit`;
+      case "precheck-keep": return `voorcontrole ${d.ref}`;
+      case "rename": return `${d.ref}: ${d.from} → ${d.to}`;
+      case "unrename": return "hernoemen meting ongedaan";
+      case "snoop-keep": return `data snooping ${d.ref}`;
+      case "snoop-on": return "data snooping aan";
+      case "set-defaults": return "standaardinstellingen";
+      case "set-reset-stage": return "instellingen stap gewist";
+    }
+    return null;
   }
   function onChange(ev) {
     const t = ev.target, d = t.dataset, st = curStage();
+    if (d.psel !== undefined) { if (t.checked) UI.psel.add(d.psel); else UI.psel.delete(d.psel); UI.keepScroll = true; render(); return; }
+    if (d.act === "psel-all") { document.querySelectorAll("[data-psel]").forEach((c) => { if (t.checked) UI.psel.add(c.dataset.psel); else UI.psel.delete(c.dataset.psel); }); UI.keepScroll = true; render(); return; }
+    if (d.act === "selcode") {
+      let v = t.value;
+      if (v === "__eigen") { v = prompt("Code (leeg laten = geen code)", ""); if (v === null) { render(); return; } v = v.trim() || "__geen"; }
+      UI.selCode = v; UI.keepScroll = true; render(); return;
+    }
+    if (d.expcol) { const m = UI.modal; const set = new Set(m.cfg.cols); if (t.checked) set.add(d.expcol); else set.delete(d.expcol); m.cfg.cols = m.order.filter((k) => set.has(k)); m.preset = ""; render(); return; }
+    if (d.expopt) { UI.modal.cfg[d.expopt] = t.checked; UI.modal.preset = ""; render(); return; }
+    if (d.m) return;
+    UI._why = d.rule !== undefined ? `regels bekende punten stap ${UI.stage + 1}` : d.src !== undefined && st && st.sources[+d.src] ? `${st.sources[+d.src].name}: ${d.k === "tag" ? "label" : d.k.replace(/^const:/, "prismaconstante ")}` : d.stageK ? `stap ${UI.stage + 1}: ${{ dims: "vereffenen", snooping: "data snooping", gnss_heights: "GNSS-hoogtes", precheck: "voorcontrole", estimate_scale: "schaalfactor", follow_captivate: "Captivate-keuze" }[d.stageK] || d.stageK}` : d.set || d.setb ? `instelling ${(t.getAttribute("aria-label") || d.set || d.setb).split(":")[0]}${UI.settingsTarget !== "project" ? ` (stap ${+UI.settingsTarget + 1})` : ""}` : null;
     if (d.act === "pickstage") { UI.stage = +t.value; render(); return; }
     if (d.act === "pfilter-code") { UI.pfilter = t.value ? "code:" + t.value : "alle"; render(); return; }
     if (d.act === "settarget") { UI.settingsTarget = t.value; render(); return; }
@@ -948,6 +1304,11 @@
   }
   function onInput(ev) {
     const t = ev.target;
+    if (t.dataset.m && UI.modal) {
+      UI.modal[t.dataset.m] = t.value;
+      if (UI.modal.kind === "rename") { const ex = t.value.trim() && t.value.trim() !== UI.modal.from && pointExists(t.value.trim()); const w = document.getElementById("mergewarn"), b = document.getElementById("renok"); if (w) w.hidden = !ex; if (b) b.textContent = ex ? "Samenvoegen" : "Wijzigen"; }
+      return;
+    }
     if (t.dataset.act === "psearch") {
       UI.psearch = t.value;
       clearTimeout(onInput.tm);
@@ -955,8 +1316,22 @@
     }
   }
 
+  function onKey(ev) {
+    if (ev.key === "Escape" && (UI.modal || UI.themeOpen)) { UI.modal = null; UI.themeOpen = false; render(); return; }
+    if (ev.key === "Enter" && UI.modal && ev.target.dataset && ev.target.dataset.m) {
+      ev.preventDefault();
+      const ok = { name: "name-ok", rename: "rename-ok", saveas: "saveas-ok" }[UI.modal.kind];
+      const btn = ok && document.querySelector(`[data-act="${ok}"]`);
+      if (btn) btn.click();
+    }
+  }
   V.startApp = function () {
+    let th = "modern";
+    try { th = localStorage.getItem(THEME_KEY) || "modern"; } catch (e) { /* geen opslag */ }
+    applyTheme(th);
     S = load();
+    if (S.stages.length || S.name !== "Nieuw project") S.nameAsked = true;
+    document.addEventListener("keydown", onKey);
     document.addEventListener("click", onClick);
     document.addEventListener("change", onChange);
     document.addEventListener("input", onInput);
@@ -964,7 +1339,7 @@
     document.body.addEventListener("dragover", (e) => e.preventDefault());
     document.body.addEventListener("drop", (e) => { if (!e.target.closest("[data-drop]")) { e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files, UI.view === "stap" ? UI.stage : undefined); } });
     render();
-    setTimeout(() => { compute(); render(); }, 10);
+    if (S.stages.length) recalc(false);
   };
-  V.APP = { get state() { return S; }, get results() { return RES; }, UI, render, compute };
+  V.APP = { get state() { return S; }, get results() { return RES; }, UI, render, compute, recalc, applyTheme };
 })(globalThis.V = globalThis.V || {});

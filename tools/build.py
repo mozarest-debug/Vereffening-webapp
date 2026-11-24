@@ -25,6 +25,7 @@ if a.demo:
             [("nap", "NAP_peilmerken.csv"), ("wp", "waterpassing_DNA.GSI"), ("gnss", "gnss_statisch.xml"), ("tps", "total_station.xml")]}
     demo_js = f"V.DEMO={json.dumps(demo)};"
 
+fonts = (R / "src" / "fonts.css").read_text(encoding="utf-8") if (R / "src" / "fonts.css").exists() else ""
 js = "".join((R / "src" / f"{n}.js").read_text(encoding="utf-8") + "\n"
              for n in ["math", "rdnap", "core", "obs", "hexml", "gsi", "trimble", "project", "export", "app"])
 safe = lambda s: s.replace("</script", "<\\/script")
@@ -35,6 +36,9 @@ html = f"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vereffening</title>
 <meta name="description" content="Vereffening grondslagnetwerk – offline webapp (kleinste kwadraten, Delftse toetsing, transformatie RD/NAP)">
+<meta name="theme-color" content="#0b2545">
+<script>try{{document.documentElement.dataset.theme=localStorage.getItem("vereffening.thema")||"modern"}}catch(e){{document.documentElement.dataset.theme="modern"}}</script>
+<style>{fonts}</style>
 <style>{(R / "src" / "style.css").read_text(encoding="utf-8")}</style>
 </head>
 <body>

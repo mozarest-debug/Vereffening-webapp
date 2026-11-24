@@ -51,6 +51,49 @@
     return "﻿" + lines.join("\r\n") + "\r\n";
   }
 
+  // ------------------------------------------------------------- tekstbestand met eigen indeling
+  // cfg: { cols: [kolomsleutels], sep: ";" | "," | "\t" | " ", dec: "," | ".", digits: 3|4,
+  //        header: bool, bom: bool, crlf: bool }
+  const DELIM_COLS = {
+    punt: { label: "Punt", head: "punt" },
+    code: { label: "Code", head: "code" },
+    omschrijving: { label: "Omschrijving code", head: "omschrijving" },
+    x: { label: "x (Oost)", head: "x", num: "c" },
+    y: { label: "y (Noord)", head: "y", num: "c" },
+    H: { label: "H (NAP)", head: "H", num: "c" },
+    sx: { label: "σx (mm)", head: "sx_mm", num: "s" },
+    sy: { label: "σy (mm)", head: "sy_mm", num: "s" },
+    sH: { label: "σH (mm)", head: "sH_mm", num: "s" },
+    controle: { label: "Controle (ja/nee)", head: "controle" },
+    status_xy: { label: "Status ligging", head: "status_xy" },
+    status_h: { label: "Status hoogte", head: "status_h" },
+  };
+  function delimValue(r, k, desc) {
+    if (k === "omschrijving") return desc ? desc(r.code) : "";
+    if (k === "sx" || k === "sy" || k === "sH") return M.isNum(r[k]) ? r[k] * 1000 : NaN;
+    return r[k];
+  }
+  function toDelimited(rows, cfg, desc) {
+    const c = Object.assign({ cols: ["punt", "x", "y", "H", "code"], sep: ";", dec: ",", digits: 4, header: true, bom: false, crlf: true }, cfg || {});
+    const cols = c.cols.filter((k) => DELIM_COLS[k]);
+    const quote = (v) => {
+      const t = String(v ?? "");
+      return t.includes(c.sep) || /["\r\n]/.test(t) || (c.sep === " " && t === "") ? `"${t.replace(/"/g, '""')}"` : t;
+    };
+    const fmt = (k, v) => {
+      const d = DELIM_COLS[k];
+      if (!d.num) return quote(v);
+      if (!M.isNum(v)) return c.sep === " " ? '""' : "";
+      const t = v.toFixed(d.num === "s" ? 1 : c.digits);
+      return c.dec === "," ? t.replace(".", ",") : t;
+    };
+    const lines = [];
+    if (c.header) lines.push(cols.map((k) => quote(DELIM_COLS[k].head)).join(c.sep));
+    for (const r of rows) lines.push(cols.map((k) => fmt(k, delimValue(r, k, desc))).join(c.sep));
+    const eol = c.crlf ? "\r\n" : "\n";
+    return (c.bom ? "\ufeff" : "") + lines.join(eol) + eol;
+  }
+
   // ------------------------------------------------------------- tekstrapport
   function adjReport(res) {
     if (!res) return "";
@@ -91,6 +134,12 @@
     L.push(`VEREFFENINGSRAPPORT – ${meta.name || "project"}`, `Datum: ${new Date().toLocaleString("nl-NL")}`, `Programma: Vereffening webapp ${meta.version || ""} (kleinste kwadraten, Delftse toetsing, transformatie ETRS89 ↔ RD/NAP)`);
     const S = project.settings;
     L.push(`Toetsing: α0 = ${S.alpha0}, β0 = ${S.beta0}  (B-methode)`, "");
+    const corr = meta.corrections || [];
+    if (corr.length) {
+      L.push("Correcties (gelden voor het hele project; de ingelezen bestanden zijn niet gewijzigd):");
+      for (const c of corr) L.push(c.type === "naam" ? `  puntnummer ${c.from} → ${c.to}` : `  code ${c.punt}: ${c.from || "–"} → ${c.to || "–"}`);
+      L.push("");
+    }
     results.forEach((R) => {
       L.push("#".repeat(78));
       L.push(...R.log, "");
@@ -210,5 +259,5 @@
     return rows;
   }
 
-  Object.assign(V, { exportRows, toCSV, rowValues, COLS, adjReport, fullReport, obsLabel, residText, mdbText, toDXF, toXLSX, obsSheetRows, DXF_LAYERS: LAYERS });
+  Object.assign(V, { exportRows, toCSV, toDelimited, DELIM_COLS, rowValues, COLS, adjReport, fullReport, obsLabel, residText, mdbText, toDXF, toXLSX, obsSheetRows, DXF_LAYERS: LAYERS });
 })(globalThis.V = globalThis.V || {});

@@ -12,6 +12,10 @@ De gebouwde app (`dist/Vereffening.html`) bevat het correctiegrid `rdcorr2018` e
 
 De transformatie tussen ETRS89 en RD/NAP is een eigen implementatie op basis van de openbare procedure van NSGI. Ze is niet officieel gevalideerd en draagt daarom niet de officiële naam van die procedure.
 
+## Lettertypes
+
+De gebouwde app bevat de lettertypes **Inter** (Copyright 2016 The Inter Project Authors) en **Nunito** (Copyright 2014 The Nunito Project Authors), als latin-subset in `src/fonts.css`. Beide vallen onder de SIL Open Font License 1.1; de licentieteksten staan in [`licenses/`](licenses/). Ze zijn ingebed zodat de app offline werkt en niets van internet laadt.
+
 ## Merken
 
 Leica, Captivate, HeXML en GSI zijn merken van Leica Geosystems. Trimble, DiNi en Trimble Access zijn merken van Trimble Inc. MOVE3 is een product van Sweco. Deze namen worden alleen gebruikt om aan te geven welke bestanden de app kan lezen. Dit project is niet verbonden aan of goedgekeurd door deze partijen.
