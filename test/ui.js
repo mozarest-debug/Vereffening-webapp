@@ -25,7 +25,7 @@ fs.mkdirSync(shots, { recursive: true });
   await p.click('[data-act="view"][data-v="kaart"]'); await p.waitForTimeout(500);
   await p.screenshot({ path: shots + "/04_kaart.png", fullPage: true });
   await p.click('[data-act="back-from-map"]');
-  await p.click('.logo'); await p.waitForTimeout(300);
+  await p.click('.crumb [data-v="stappen"]'); await p.waitForTimeout(300);
   await p.click('.nav [data-v="controles"]'); await p.waitForTimeout(400);
   await p.screenshot({ path: shots + "/05_controles.png", fullPage: true });
   await p.click('.nav [data-v="instellingen"]'); await p.waitForTimeout(400);

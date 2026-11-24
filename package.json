@@ -1,6 +1,6 @@
 {
   "name": "vereffening-webapp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Offline webapp voor de vereffening van grondslagnetwerken (kleinste kwadraten, Delftse toetsing, transformatie RD/NAP)",
   "license": "GPL-3.0-or-later",
   "private": true,
@@ -8,7 +8,8 @@
     "build": "python3 tools/build.py",
     "fixtures": "node tools/make_trimble_tests.js",
     "test:trimble": "node tools/make_trimble_tests.js && node test/test_trimble.js",
-    "test:ui": "node test/ui.js && node test/ui3.js"
+    "test:ui": "node test/ui.js && node test/ui3.js && node test/ui_v12.js",
+    "test:correcties": "node test/test_correcties.js"
   },
   "devDependencies": {
     "playwright": "^1.40.0"

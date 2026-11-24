@@ -87,12 +87,74 @@
     };
   }
 
+  // ------------------------------------------------------------- cache
+  // Het inlezen van grote bestanden (vooral HeXML met transformatie) is het duurste deel.
+  // De uitkomst hangt alleen af van de bestandsinhoud en de instellingen, dus die bewaren we.
+  const CACHE = new Map();
+  const CACHE_MAX = 40;
+  function cached(kind, src, extra, fn) {
+    const t = src.text || src.b64 || "";
+    const key = `${kind}|${src.id || src.name}|${t.length}|${t.slice(0, 48)}|${t.slice(-48)}|${extra}`;
+    if (CACHE.has(key)) { const v = CACHE.get(key); CACHE.delete(key); CACHE.set(key, v); return v; }
+    const v = fn();
+    CACHE.set(key, v);
+    while (CACHE.size > CACHE_MAX) CACHE.delete(CACHE.keys().next().value);
+    return v;
+  }
+
+  // ------------------------------------------------------------- correcties (hele project)
+  // { type: "naam", from, to } hernoemt een punt in alle bestanden en waarnemingen;
+  // { type: "code", punt, from, to } geeft een punt een andere code. Bestanden blijven ongewijzigd.
+  function renameMap(corrections) {
+    const m = new Map();
+    for (const c of corrections || []) {
+      if (c.type !== "naam" || !c.from || !c.to || c.from === c.to) continue;
+      for (const [k, v] of m) if (v === c.from) m.set(k, c.to);
+      if (!m.has(c.from)) m.set(c.from, c.to);
+    }
+    return m;
+  }
+  function renameNet(net, m) {
+    if (!net || !m.size) return 0;
+    let k = 0;
+    const nn = (n) => (m.has(n) ? m.get(n) : n);
+    for (const o of net.obs) {
+      const f = nn(o.frm), t = o.to ? nn(o.to) : o.to;
+      if (f !== o.frm || t !== o.to) { o.meta = { ...o.meta, was: (o.meta && o.meta.was) || (f !== o.frm ? o.frm : o.to) }; o.frm = f; o.to = t; k++; }
+    }
+    for (const [from, to] of m) {
+      const p = net.points[from];
+      if (!p) continue;
+      delete net.points[from];
+      const q = net.points[to];
+      if (!q) net.points[to] = { ...p, name: to, was: from };
+      else {
+        for (const a of ["x", "y", "H"]) if (!M.isNum(q[a]) && M.isNum(p[a])) q[a] = p[a];
+        if (!q.code && p.code) q.code = p.code;
+        q.was = q.was || from;
+      }
+    }
+    return k;
+  }
+  function renameLists(lists, m) {
+    if (!lists || !m.size) return lists;
+    for (const [from, to] of m) if (from in lists) { if (!(to in lists)) lists[to] = lists[from]; delete lists[from]; }
+    return lists;
+  }
+  function codeMap(corrections) {
+    const out = {};
+    for (const c of corrections || []) if (c.type === "code" && c.punt) out[c.punt] = c.to || "";
+    return out;
+  }
+
   class Project {
     constructor(trans, settings) {
       this.trans = trans;
       this.settings = settings || V.defaultSettings();
       this.stages = [];
       this.results = [];
+      this.corrections = [];
+      this._renFrom = [];
     }
 
     _levSource(net, lev, src, S, R, tag, label0, kind) {
@@ -117,14 +179,16 @@
       const log = R.log, ck = R.checks;
       const label = src.tag || src.name;
       if (src.kind === "coords") {
-        const c = V.readCoordinates(src.text);
+        const c0 = cached("coords", src, "", () => V.readCoordinates(src.text));
+        const c = {};
+        for (const [n, v] of Object.entries(c0)) { c[n] = [...v]; if (v.code) c[n].code = v.code; }
         log.push(`${label}: ${Object.keys(c).length} coördinaten`);
         ck.sources.push({ tag: src.tag, name: src.name, kind: "coords", summary: `${Object.keys(c).length} coördinaten` });
         return { net: null, lists: c };
       }
       if (src.kind === "hexml") {
         if (!this.trans) throw new Error("Transformatiegrids RD/NAP ontbreken");
-        const imp = V.loadHexml(src.text, this.trans, S);
+        const imp = cached("hexml", src, JSON.stringify(S), () => V.loadHexml(src.text, this.trans, S));
         const nOcc = imp.net.obs.filter((o) => o.kind === "GNSS").length;
         const nG = Object.keys(imp.gnss).length;
         const nR = imp.net.obs.filter((o) => o.kind === "R").length;
@@ -160,11 +224,11 @@
         return { net: imp.net, lists: imp.control };
       }
       if (src.kind === "gsi") {
-        const blocks = V.readGsi(src.text);
+        const blocks = cached("gsi", src, "", () => V.readGsi(src.text));
         const kind = (src.options && src.options.soort) || V.detectKind(blocks);
         const net = new V.Network();
         if (kind === "waterpassing") {
-          const keep = new Set([...((src.options && src.options.keep) || []), ...Object.keys(known)]);
+          const keep = new Set([...((src.options && src.options.keep) || []), ...Object.keys(known), ...this._renFrom]);
           const lev = V.parseLeveling(blocks, keep, tag, S.lev_tp_maxlen);
           this._levSource(net, lev, src, S, R, tag, "GSI-waterpassing", "gsi-wp");
         } else {
@@ -181,7 +245,7 @@
       }
       if (src.kind === "dini") {
         const net = new V.Network();
-        const lev = V.parseDini(src.text, new Set(Object.keys(known)), tag, { renames: (src.options && src.options.names) || {}, map: !(src.options && src.options.map === false) });
+        const lev = V.parseDini(src.text, new Set([...Object.keys(known), ...this._renFrom]), tag, { renames: (src.options && src.options.names) || {}, map: !(src.options && src.options.map === false) });
         this._levSource(net, lev, src, S, R, tag, "Trimble DiNi-waterpassing", "dini");
         const d = lev.dini;
         const nm = Object.entries(d.map);
@@ -193,7 +257,7 @@
       }
       if (src.kind === "dc") {
         if (!this.trans) throw new Error("Transformatiegrids RD/NAP ontbreken");
-        const imp = V.loadDc(src.text, this.trans, S, tag);
+        const imp = cached("dc", src, JSON.stringify(S) + tag, () => V.loadDc(src.text, this.trans, S, tag));
         const nG = Object.keys(imp.gnss).length, nOcc = imp.occ.length;
         const sum = `${nG} GNSS-punten` + (nOcc > nG ? ` (${nOcc} bezettingen)` : "");
         log.push(`${label}: Trimble DC (GNSS), ${sum}`);
@@ -224,7 +288,7 @@
       }
       if (src.kind === "job") {
         const net = new V.Network();
-        const tps = V.parseJobTps(V.b64ToBytes(src.b64), new Set(Object.keys(known)), tag, { constants: (src.options && src.options.constants) || {} });
+        const tps = V.parseJobTps(V.b64ToBytes(src.b64), new Set([...Object.keys(known), ...this._renFrom]), tag, { constants: (src.options && src.options.constants) || {} });
         V.addTpsToNetwork(net, tps, known, S, true, tag);
         const fc = tps.face_checks;
         const pr = Object.entries(tps.prisms).map(([k, v]) => `${k} ${sg(v, 1)} mm`).join(", ");
@@ -289,6 +353,9 @@
       try {
         const net = new V.Network();
         const lists = {};
+        const ren = renameMap(this.corrections);
+        this._renFrom = [...ren.keys()];
+        let nRen = 0;
         const prevAll = this.results.length ? this.previous("vorige") : {};
         const known = {};
         for (const [n, c] of Object.entries(prevAll)) known[n] = [c.x ?? NaN, c.y ?? NaN, c.H ?? NaN];
@@ -298,6 +365,7 @@
         for (const src of srcs) {
           if (src.kind === "coords") {
             const { lists: c } = this._load(src, S, known, R);
+            renameLists(c, ren);
             Object.assign(lists, c);
             for (const [n, v] of Object.entries(c)) known[n] = [0, 1, 2].map((i) => (M.isNum(v[i]) ? v[i] : (known[n] || [NaN, NaN, NaN])[i]));
             continue;
@@ -306,7 +374,11 @@
             const kc = (known[n] = known[n] || [NaN, NaN, NaN]);
             ["x", "y", "H"].forEach((a, i) => { if (!M.isNum(kc[i]) && M.isNum(p[a])) kc[i] = p[a]; });
           }
-          const { net: sub, lists: ctl } = this._load(src, S, known, R);
+          for (const [f, t] of ren) if (known[t] && !known[f]) known[f] = known[t];
+          const { net: sub0, lists: ctl0 } = this._load(src, S, known, R);
+          const sub = ren.size ? sub0.clone() : sub0;
+          const ctl = ren.size && ctl0 ? renameLists({ ...ctl0 }, ren) : ctl0;
+          nRen += renameNet(sub, ren);
           for (const [n, v] of Object.entries(ctl || {})) if (!(n in lists)) lists[n] = [...v];
           Project.merge(net, sub, src.tag);
         }
@@ -316,6 +388,14 @@
           if (kc) ["x", "y", "H"].forEach((a, i) => { if (!M.isNum(p[a]) && M.isNum(kc[i])) p[a] = kc[i]; });
           if (lists[n] && lists[n].code && !p.code) p.code = lists[n].code;
         }
+        // correcties uit het hele project
+        if (ren.size) {
+          const hit = [...ren].filter(([f]) => net.obs.some((o) => o.meta && o.meta.was === f) || Object.values(net.points).some((p) => p.was === f));
+          if (hit.length) log.push(`Correctie puntnummers: ${hit.map(([f, t]) => `${f} → ${t}`).join(", ")} (${nRen} waarnemingen)`);
+        }
+        const cm = codeMap(this.corrections), cHit = [];
+        for (const [n, c] of Object.entries(cm)) if (net.points[n] && net.points[n].code !== c) { cHit.push(`${n} ${net.points[n].code || "–"} → ${c || "–"}`); net.points[n].code_was = net.points[n].code; net.points[n].code = c; }
+        if (cHit.length) log.push(`Correctie codes: ${cHit.join(", ")}`);
         // hernoemen (verkeerd puntnummer)
         for (const rn of st.renames || []) {
           let k = 0;
@@ -515,5 +595,5 @@
     }
   }
 
-  Object.assign(V, { Project, newStage, matchPoints, readTco, readObsM3, move3Network });
+  Object.assign(V, { Project, newStage, renameMap, matchPoints, readTco, readObsM3, move3Network });
 })(globalThis.V = globalThis.V || {});

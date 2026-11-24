@@ -9,7 +9,9 @@ Offline webapp voor de vereffening van grondslagnetwerken. De app is één HTML-
   - Leica Captivate HeXML/LandXML (total station en GNSS) en Leica GSI8/16 (total station en digitale waterpassing);
   - Trimble DiNi M5 (`.dat`, digitale waterpassing), Trimble Survey Controller DC (`.dc`, GNSS) en Trimble Access `.job` (total station, **experimenteel**);
   - MOVE3-projecten (`.tco` + `.obs`) en coördinatenlijsten (`.csv`, `.txt`).
-- **Export:** CSV, XLSX, DXF R12 (netwerkkaart met lagen en ellipsen) en een tekstrapport.
+- **Export:** CSV/TXT met eigen indeling (kolommen, volgorde, scheidingsteken, decimaalteken, voorinstellingen), XLSX, DXF R12 (netwerkkaart met lagen en ellipsen) en een tekstrapport.
+- **Werken:** rekenen gebeurt alleen met de knop **Herberekenen**; wijzigingen worden tot dan verzameld. Codes en puntnummers zijn achteraf voor het hele project te corrigeren (de ingelezen bestanden blijven ongewijzigd). Opslaan en Opslaan als met een eigen map (Chrome/Edge op Windows) of via Downloads.
+- **Weergave:** vier stijlen, te kiezen via het logo linksboven: Modern (standaard), Classic, Veldwerk en Veldwerk donker.
 
 Alle berekeningen gebeuren lokaal in de browser. Er worden geen gegevens verstuurd.
 
@@ -30,10 +32,12 @@ src/            broncode van de app
   hexml.js        import Leica HeXML/LandXML
   gsi.js          import Leica GSI8/16 en coördinatenlijsten
   trimble.js      import Trimble DiNi M5, DC en .job (experimenteel)
-  project.js      stappen, bekende punten, data snooping, MOVE3-import
-  export.js       CSV, XLSX, DXF, rapport
+  project.js      stappen, bekende punten, correcties, data snooping, cache, MOVE3-import
+  export.js       CSV/TXT, XLSX, DXF, rapport
   app.js          gebruikersinterface
-  style.css       opmaak
+  style.css       opmaak en de vier stijlen
+  fonts.css       ingebedde lettertypes Inter en Nunito (OFL, zie licenses/)
+licenses/       licentieteksten van de lettertypes
 dist/           gebouwde bestanden
   codes.js        algemene codelijst (vervang door je eigen lijst)
 tools/          bouwscripts
@@ -45,7 +49,8 @@ test/           tests
   fixtures/trimble/   fictieve Trimble-testbestanden (.dat, .dc, .csv)
   test_trimble.js     test van de Trimble-imports
   test_rdnap.js       test van de transformatie met de openbare testset
-  ui.js, ui3.js       interfacetests (Playwright)
+  test_correcties.js  correcties (puntnummer, code) en cache
+  ui.js, ui3.js, ui_v12.js   interfacetests (Playwright)
 ```
 
 ## Bouwen
@@ -74,6 +79,7 @@ Je hebt Python 3 en Node.js nodig. De app gebruikt geen externe bibliotheken.
 ```
 node tools/make_trimble_tests.js && node test/test_trimble.js   # Trimble-imports
 node test/test_rdnap.js pad/naar/Z001_ETRS89andRDNAP.txt         # transformatie (openbare testset van NSGI)
+node test/test_correcties.js MAP                                  # correcties en cache; MAP = map van het voorbeeldproject
 npm install && npm run test:ui                                    # interface; vereist een build met --demo
 ```
 

@@ -15,7 +15,8 @@ fs.mkdirSync(shots, { recursive: true });
   await p.screenshot({ path: shots + "/20_cc_vereffening.png" });
   // hernoemen-knop testen
   await p.click('.nav [data-v="bestanden"]'); await p.waitForTimeout(300);
-  await p.click('[data-act="rename"]'); await p.waitForTimeout(800);
+  await p.click('[data-act="rename"]'); await p.waitForTimeout(300);
+  await p.click('.stalebar [data-act="recalc"]'); await p.waitForTimeout(1200);
   const log = await p.evaluate(() => V.APP.results[2].log.filter((l) => /Hernoemd|Voorcontrole|2D/.test(l)));
   console.log(log, errs);
   await b.close();
